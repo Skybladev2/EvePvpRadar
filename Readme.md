@@ -24,7 +24,7 @@ IMAGE_TAG=$(git rev-parse HEAD) docker compose up
 ```
 4. Stop the service
 ```
-docker compose down -v
+Ctrl+C, docker compose down -v
 ```
 
 ## Debugging
