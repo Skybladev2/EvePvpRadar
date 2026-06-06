@@ -2,7 +2,7 @@
 
 A web application for finding PvP activity in EVE Online.
 
-## Prerequsites
+## Prerequisites
 
 * Docker Compose
 * Network access to the following sites:
@@ -20,7 +20,7 @@ IMAGE_TAG=$(git rev-parse HEAD) docker compose build
 ```
 3. Run the service
 ```
-docker compose up
+IMAGE_TAG=$(git rev-parse HEAD) docker compose up
 ```
 4. Stop the service
 ```
@@ -31,7 +31,7 @@ docker compose down -v
 
 For clean build:
 ```
-IMAGE_TAG=$(git rev-parse HEAD) docker compose build --no-cache && docker compose up --force-recreate
+IMAGE_TAG=$(git rev-parse HEAD) docker compose build --no-cache && IMAGE_TAG=$(git rev-parse HEAD) docker compose up --force-recreate
 ```
 
 ## Performance optimization
