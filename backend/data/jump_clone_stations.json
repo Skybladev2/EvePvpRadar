@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+    "station_id": 60003760,
+    "system_id": 30000142,
+    "system_name": "Jita"
+  },
+  {
+    "name": "Amarr VIII (Oris) - Emperor Family Academy",
+    "station_id": 60008494,
+    "system_id": 30002187,
+    "system_name": "Amarr"
+  },
+  {
+    "name": "Hek VIII - Moon 17 - Aliastra Retail Center",
+    "station_id": 60011287,
+    "system_id": 30002053,
+    "system_name": "Hek"
+  },
+  {
+    "name": "Rens VI - Moon 8 - Brutor Tribe Treasury",
+    "station_id": 60004588,
+    "system_id": 30002510,
+    "system_name": "Rens"
+  },
+  {
+    "name": "Dodixie V - Paragon Fulfillment Center",
+    "station_id": 60015170,
+    "system_id": 30002659,
+    "system_name": "Dodixie"
+  }
+]

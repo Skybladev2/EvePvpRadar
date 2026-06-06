@@ -1,0 +1,102 @@
+[
+  {
+    "name": "Jita",
+    "system_id": 30000142,
+    "region": "The Forge",
+    "type": "primary",
+    "station_name": "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+    "station_id": 60003760
+  },
+  {
+    "name": "Amarr",
+    "system_id": 30002187,
+    "region": "Domain",
+    "type": "primary"
+  },
+  {
+    "name": "Rens",
+    "system_id": 30002510,
+    "region": "Heimatar",
+    "type": "primary"
+  },
+  {
+    "name": "Dodixie",
+    "system_id": 30002659,
+    "region": "Sinq Laison",
+    "type": "primary",
+    "station_name": "Dodixie IX - Moon 20 - Federation Navy Assembly Plant",
+    "station_id": 60011866
+  },
+  {
+    "name": "Hek",
+    "system_id": 30002053,
+    "region": "Metropolis",
+    "type": "primary",
+    "station_name": "Hek VIII - Moon 12 - Boundless Creation Factory",
+    "station_id": 60005686
+  },
+  {
+    "name": "Tash-Murkon Prime",
+    "system_id": 30004238,
+    "region": "Tash-Murkon",
+    "type": "secondary"
+  },
+  {
+    "name": "Oursulaert",
+    "system_id": 30004969,
+    "region": "Essence",
+    "type": "secondary"
+  },
+  {
+    "name": "Arnon",
+    "system_id": 30005001,
+    "region": "Essence",
+    "type": "secondary"
+  },
+  {
+    "name": "Halle",
+    "system_id": 30003010,
+    "region": "Everyshore",
+    "type": "secondary"
+  },
+  {
+    "name": "Teonusude",
+    "system_id": 30002385,
+    "region": "Molden Heath",
+    "type": "secondary"
+  },
+  {
+    "name": "Orvolle",
+    "system_id": 30003830,
+    "region": "Placid",
+    "type": "secondary"
+  },
+  {
+    "name": "Stacmon",
+    "system_id": 30003794,
+    "region": "Placid",
+    "type": "secondary"
+  },
+  {
+    "name": "Boystin",
+    "system_id": 30003574,
+    "region": "Solitude",
+    "type": "secondary"
+  },
+  {
+    "name": "Thera",
+    "system_id": 31000005,
+    "region": "Thera",
+    "type": "special",
+    "station_name": "Thera XII - The Sanctuary Institute of Paleocybernetics",
+    "station_id": 60015148
+  },
+  {
+    "name": "Zarzakh",
+    "system_id": 30100000,
+    "region": "Zarzakh",
+    "type": "special",
+    "station_name": "Zarzakh - Deathless Custodians - The Fulcrum",
+    "station_id": 60015187
+  }
+]

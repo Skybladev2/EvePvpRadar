@@ -1,0 +1,3416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eve PvP Radar</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" sizes="any">
+    <meta name="container-tag" content="[[.ContainerTag]]">
+    [[.ShipIconsStyle]]
+    <style>
+        html {
+            font-size: 16px; /* Base font size for FullHD (1920px) */
+            scroll-behavior: smooth;
+        }
+        html, body {
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+        }
+        body {
+            display: flex;
+            flex-direction: column;
+            padding: 0 0.625rem;
+            box-sizing: border-box;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        /* 4K+ displays: scale fonts proportionally (4K is ~2x FullHD) */
+        @media (min-width: 2560px) {
+            html {
+                font-size: 20px; /* ~1.25x for 2560px */
+            }
+        }
+        @media (min-width: 3840px) {
+            html {
+                font-size: 24px; /* ~1.5x for 4K */
+            }
+        }
+        @media (min-width: 5120px) {
+            html {
+                font-size: 32px; /* ~2x for 5K+ */
+            }
+        }
+        /* High-DPI displays with at least FullHD viewport: scale up for
+           OS-level scaling (e.g. 4K at "Looks like 1920x1080") */
+        @media (min-width: 1920px) and (min-resolution: 1.5dppx),
+               (min-width: 1920px) and (-webkit-min-device-pixel-ratio: 1.5) {
+            html {
+                font-size: 24px;
+            }
+        }
+        @media (min-width: 2560px) and (min-resolution: 2dppx),
+               (min-width: 2560px) and (-webkit-min-device-pixel-ratio: 2) {
+            html {
+                font-size: 32px;
+            }
+        }
+        body > *:not(#result-container) {
+            flex-shrink: 0;
+        }
+        h1 {
+            color: #dedede;
+        }
+        label {
+            color: #e0e0e0;
+        }
+        input[type="text"] {
+            background-color: #2d2d2d;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            padding: 0.375rem 0.625rem;
+            border-radius: 4px;
+        }
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #555;
+            background-color: #333;
+        }
+        /* Mode row: mode tabs left, CCP link right */
+        .mode-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            gap: 1rem;
+            margin: 0.625rem 0;
+        }
+        .ccp-legal-link {
+            flex-shrink: 0;
+            color: #888;
+            font-size: 0.9em;
+        }
+        .ccp-legal-link:hover {
+            color: #6ab7ff;
+        }
+        .mode-row-footer-links {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-shrink: 0;
+        }
+        .footer-link-sep {
+            color: #888;
+            user-select: none;
+        }
+        /* Mode selection: radiobuttons as two halves of one button (segmented control) */
+        .mode-tabs {
+            display: inline-flex;
+            margin: 0;
+            align-self: flex-start;
+            background-color: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .mode-tabs label {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            font-weight: 500;
+            color: #888;
+            background-color: transparent;
+            border: none;
+            border-right: 1px solid #444;
+            transition: background-color 0.2s, color 0.2s;
+        }
+        .mode-tabs label:last-of-type {
+            border-right: none;
+        }
+        .mode-tabs label:hover {
+            color: #e0e0e0;
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+        .mode-tabs input[type="radio"] {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+            margin: 0;
+        }
+        .mode-tabs label:has(input[type="radio"]:checked) {
+            background-color: #3a3a3a;
+            color: #6ab7ff;
+        }
+        .mode-tabs label:has(input[type="radio"]:focus-visible) {
+            outline: 2px solid #6ab7ff;
+            outline-offset: -2px;
+        }
+        .mode-tabs.loading {
+            opacity: 0.7;
+            pointer-events: none;
+        }
+        button {
+            background-color: #3a3a3a;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            padding: 0.375rem 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #4a4a4a;
+            border-color: #666;
+        }
+        button:active {
+            background-color: #2a2a2a;
+        }
+        a {
+            color: #6ab7ff;
+        }
+        a:hover {
+            color: #8bc8ff;
+        }
+        a:visited {
+            color: #9b7fff;
+        }
+        a:has(.ship-type-text) {
+            text-decoration: none;
+        }
+        #result td {
+            text-align: center;
+        }
+        #result td:last-child {
+            text-align: left;
+        }
+        .thera-route {
+            color: #FF6B35;
+            font-weight: bold;
+        }
+        .zarzakh-route {
+            color: #9B59B6;
+            font-weight: bold;
+        }
+        .thera-cell {
+            color: #FF6B35;
+            font-weight: bold;
+        }
+        /* EOL (End of Life) – Thera wormhole may collapse soon */
+        .distance-value.thera-eol {
+            color: #FFA500;
+        }
+        .distance-value.thera-eol .route-warning-sign {
+            color: #FFA500;
+        }
+        .route-system {
+            display: inline-block;
+            margin: 0.125rem 0;
+            padding: 0.0625rem 0.1875rem;
+            border-radius: 2px;
+            color: #e0e0e0;
+        }
+        /* Thera signatures are informational and should not inherit bold styling
+           from the Thera hop wrapper ('.route-system.thera-route'). */
+        .thera-sig {
+            font-weight: normal;
+        }
+        .route-container {
+            font-size: 0.9em;
+            background-color: #2a2a2a;
+            border: 1px solid #555;
+            color: #e0e0e0;
+            padding: 0.5rem;
+            border-radius: 4px;
+            margin-top: 0.3125rem;
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+            max-width: 100%;
+        }
+        .route-container.hidden {
+            display: none;
+        }
+        .route-header {
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+            color: #dedede;
+        }
+        .route-list {
+            line-height: 1.4;
+            color: #e0e0e0;
+        }
+        .route-system.thera-route {
+            font-weight: bold;
+            color: #FF6B35;
+        }
+        /* Keep Thera signature text normal-weight even inside the bold Thera hop wrapper. */
+        .route-system.thera-route .thera-sig {
+            font-weight: normal;
+            color: #e0e0e0;
+        }
+        .route-system.zarzakh-route {
+            font-weight: bold;
+            color: #9B59B6;
+        }
+        .route-system.route-system-with-kills {
+            font-weight: bold;
+        }
+        .route-system-link {
+            color: #ff6b6b;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+        .route-system-link:hover {
+            color: #ff8787;
+            text-decoration: underline;
+        }
+        .route-arrow {
+            color: #888;
+        }
+        .distance-value {
+            cursor: pointer;
+            border-bottom: 1px dashed currentColor;
+            display: inline-block;
+        }
+        .route-warning-sign {
+            color: #B8860B;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .attackers-section {
+            display: block;
+            margin-top: 0.5em;
+        }
+        .attackers-section p {
+            margin: 0;
+        }
+        /* Pilot icons (character links) */
+        #result a[href*='/character/'] {
+            font-family: "Droid Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+            text-decoration: none;
+            color: inherit;
+        }
+        .pilot-link {
+            text-decoration: none;
+            display: inline-block;
+            position: relative;
+            vertical-align: text-bottom;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .pilot-multi-system {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.125rem;
+            vertical-align: text-bottom;
+            color: inherit;
+            white-space: nowrap;
+        }
+        .pilot-hide-systems-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 0.0625rem;
+            margin: 0;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            color: #888;
+            line-height: 1;
+            vertical-align: middle;
+            flex-shrink: 0;
+        }
+        .pilot-hide-systems-btn:hover {
+            color: #ccc;
+        }
+        .pilot-hide-systems-btn.active {
+            color: #4fc3f7;
+        }
+        .pilot-icon-wrap {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            height: 16px;
+            line-height: 1;
+        }
+
+        .pilot-multi-system .pilot-icon-wrap {
+            display: inline-flex;
+        }
+        .pilot-icon {
+            display: inline-block;
+            vertical-align: text-bottom;            
+            width: auto;
+        }
+        /* Running-man SVG paths use fixed fills, so color only the active state explicitly. */
+        .pilot-icon-wrap.pilot-hide-systems-btn.active .pilot-icon * {
+            fill: #4fc3f7 !important;
+            stroke: #4fc3f7 !important;
+        }
+        .pilot-link[data-tooltip]::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: 50%;
+            bottom: calc(100% + 6px);
+            transform: translateX(-50%);
+            padding: 0.25rem 0.5rem;
+            background-color: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: normal;
+            line-height: 1.2;
+            max-width: none;
+            white-space: nowrap;
+            text-align: center;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0s;
+            z-index: 1000;
+        }
+        .pilot-link[data-tooltip]:hover::after {
+            opacity: 1;
+        }
+        .attackers-toggle {
+            cursor: pointer;
+            color: #6ab7ff;
+            text-decoration: underline;
+        }
+        .attackers-list {
+            display: none;
+            margin-top: 0.3125rem;
+        }
+        #result-container {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: auto;
+            margin: 0.625rem 0;
+            -webkit-overflow-scrolling: touch; /* Smooth scrolling on mobile */
+        }
+        /* Mobile: ensure table is scrollable horizontally */
+        @media (max-width: 768px) {
+            html, body {
+                overflow: visible;
+                height: auto;
+            }
+            #result-container {
+                overflow-x: visible;
+            }
+            #result,
+            #result thead,
+            #result tbody,
+            #result tr,
+            #result td {
+                display: block;
+                width: 100% !important;
+                min-width: 0 !important;
+                box-sizing: border-box;
+            }
+            #result thead {
+                display: none;
+            }
+            #result tr {
+                border: 1px solid #444;
+                margin-bottom: 0.75rem;
+                border-radius: 6px;
+            }
+            #result td {
+                padding: 0.625rem !important;
+                border: none !important;
+                border-bottom: 1px solid #333 !important;
+            }
+            #result td:last-child {
+                border-bottom: none !important;
+            }
+            #result td::before {
+                content: attr(data-label);
+                display: block;
+                font-weight: bold;
+                color: #888;
+                font-size: 0.75em;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-bottom: 0.375rem;
+            }
+        }
+        @media (max-width: 400px) {
+            #app-header h1 {
+                font-size: 1.1rem;
+            }
+            #eve-login-button img {
+                content: url("[[.LoginImageSmallDataURI]]") !important;
+                height: 30px !important;
+            }
+            .hubs-jump-clones-table .station-with-btn .jump-clone-destination-btn {
+                white-space: normal;
+                font-size: 0.75em;
+                padding: 0.15rem 0.3rem;
+            }
+        }
+        @media (max-width: 550px) {
+            .mode-row {
+                flex-wrap: wrap;
+                gap: 0.25rem;
+            }
+            .mode-row-footer-links {
+                width: 100%;
+                justify-content: flex-start;
+            }
+        }
+        #result {
+            border-collapse: separate;
+            border-spacing: 0;
+            background-color: #1a1a1a;
+            width: 100%;
+            table-layout: fixed;
+        }
+        /* Responsive column widths using percentages (except Range which fills remaining space) */
+        #result thead th:first-child {
+            width: 9.375rem;
+        }
+        #result thead th.recency-header {
+            width: 6.875rem;
+        }
+        #result thead th.trade-hub-header {
+            width: 6.875rem;
+        }
+        /* Trade Hub header padding: remove left padding, keep right padding tight */
+        #result thead th.trade-hub-header {
+            padding-left: 0;
+            padding-right: 0.5rem;
+        }
+        #result thead th.trade-hub-header.sortable {
+            padding-right: 0.5rem; /* override generic sortable rule */
+        }
+        #result thead th:last-child {
+            width: 35.4%;
+            min-width: 200px;
+        }
+        /* Range column: fills remaining space */
+        #result thead th.range-header {
+            width: auto;
+            min-width: 0;
+        }
+        #result tbody td:has(.distance-value) {
+            width: auto;
+            min-width: 0;
+        }
+        /* Recency and Trade Hub td: match header widths */
+        #result td[data-recency] {
+            width: 6.875rem;
+        }
+        #result td:has(a.trade-hub) {
+            width: 6.875rem;
+        }
+        /* Mobile adjustments: stack or adjust columns for smaller screens */
+        @media (max-width: 768px) {
+        }
+        #result th, #result td {
+            padding: 0 0.5rem 0.5rem 0.5rem;
+            background-color: #1a1a1a;
+        }
+        #result th {
+            border-top: 1px solid #444;
+            border-bottom: 1px solid #444;
+            border-left: 1px solid #444;
+            border-right: none;
+        }
+        #result th:last-child {
+            border-right: 1px solid #444;
+        }
+        #result td {
+            border-top: none;
+            border-bottom: 1px solid #444;
+            border-left: 1px solid #444;
+            border-right: none;
+        }
+        #result td:last-child {
+            border-right: 1px solid #444;
+        }
+        #result tr:last-child td {
+            border-bottom: 1px solid #444;
+        }
+        #result thead {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        #result thead th {
+            position: sticky;
+            top: 0;
+            background-color: #2a2a2a;
+            color: #dedede;
+            font-weight: bold;
+            font-size: 0.875rem;
+            padding: 0.5rem;
+            box-sizing: border-box;
+            border: 1px solid #444;
+        }
+        #result th {
+            background-color: #2a2a2a;
+            color: #dedede;
+            font-weight: bold;
+            padding: 0.5rem;
+        }
+        #result th.sortable {
+            cursor: pointer;
+            user-select: none;
+            position: relative;
+            padding-right: 0.5rem;
+        }
+        #result th.sortable:hover {
+            background-color: #3a3a3a;
+        }
+        #result th.sortable::after {
+            content: '▴\A▾';
+            white-space: pre;
+            line-height: 0.85;
+            position: absolute;
+            top: 50%;
+            right: 0.375rem;
+            transform: translateY(-50%);
+            opacity: 0.5;
+            font-size: 0.8em;
+            display: block;
+            text-align: center;
+        }
+        #result th.sortable.sort-asc::after {
+            content: '▴';
+            opacity: 1;
+        }
+        #result th.sortable.sort-desc::after {
+            content: '▾';
+            opacity: 1;
+        }
+        #result td {
+            color: #e0e0e0;
+            padding-top: 0;
+        }
+        /* System column: responsive width; two inner divs so "Set destination" is always below system name */
+        #result td:first-child {
+            width: 9.375rem;
+            vertical-align: middle;
+        }
+        @media (max-width: 768px) {
+        }
+        #result td:first-child .system-cell-name,
+        #result td:first-child .system-cell-destination {
+            display: block;
+        }
+        #result td:first-child .system-cell-name .system-twitch-link {
+            display: inline-flex;
+            align-items: center;
+            line-height: 1;
+            vertical-align: middle;
+            text-decoration: none;
+        }
+        #result td:first-child .system-cell-name .system-twitch-link:hover .system-twitch-icon {
+            filter: brightness(1.18);
+        }
+        #result td:first-child .system-cell-destination {
+            margin-top: 0.375rem;
+            display: flex;
+            justify-content: center;
+        }
+        #result td:first-child .set-destination-btn {
+            margin-left: 0;
+        }
+        /* Notes column: responsive width, wrap long text */
+        #result td:last-child {
+            width: 35.4%;
+            min-width: 200px; /* Minimum for mobile */
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+        }
+        @media (max-width: 768px) {
+        }
+        /* Range column is flexible (no width set); route content wraps inside cell */
+        [title]:not(th):not(td) {
+            position: relative;
+        }
+        .killmail-container {
+            width: 100%;
+        }
+        .killmail-row {
+            padding: 0.25rem 0.125rem;
+            border-bottom: 1px solid #444;
+        }
+        .killmail-row:last-child {
+            border-bottom: none;
+        }
+        .killmail-overflow {
+            margin-top: 0.25rem;
+        }
+        .killmail-overflow summary {
+            cursor: pointer;
+            font-size: 12px;
+            color: #888;
+            padding: 0.125rem 0;
+        }
+        .killmail-overflow[open] summary {
+            margin-bottom: 0.25rem;
+        }
+        .killmail-overflow .killmail-overflow-hide {
+            display: none;
+        }
+        .killmail-overflow[open] .killmail-overflow-show {
+            display: none;
+        }
+        .killmail-overflow[open] .killmail-overflow-hide {
+            display: inline;
+        }
+        .recency-header {
+            position: relative;
+            cursor: help;
+        }
+        .recency-header .tooltip-icon {
+            position: relative;
+            display: inline-block;
+        }
+        .recency-header .tooltip-icon::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: 100%;
+            top: -8px;
+            margin-left: 0.625rem;
+            padding: 0.5rem 0.75rem;
+            background-color: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: normal;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0s;
+            z-index: 1000;
+            width: 320px;
+            white-space: normal;
+            text-align: left;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            line-height: 1.4;
+        }
+        .recency-header .tooltip-icon::before {
+            content: '';
+            position: absolute;
+            left: 100%;
+            top: 0;
+            margin-left: 0.3125rem;
+            border: 5px solid transparent;
+            border-right-color: #2a2a2a;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0s;
+            z-index: 1001;
+        }
+        .recency-header:hover .tooltip-icon::after,
+        .recency-header:hover .tooltip-icon::before {
+            opacity: 1;
+        }
+        .range-header {
+            position: relative;
+            cursor: help;
+        }
+        .range-header .tooltip-icon {
+            position: relative;
+            display: inline-block;
+        }
+        .range-header .tooltip-icon::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: 100%;
+            top: -8px;
+            margin-left: 0.625rem;
+            padding: 0.5rem 0.75rem;
+            background-color: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: normal;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0s;
+            z-index: 1000;
+            width: 320px;
+            white-space: normal;
+            text-align: left;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            line-height: 1.4;
+        }
+        .range-header .tooltip-icon::before {
+            content: '';
+            position: absolute;
+            left: 100%;
+            top: 0;
+            margin-left: 0.3125rem;
+            border: 5px solid transparent;
+            border-right-color: #2a2a2a;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0s;
+            z-index: 1001;
+        }
+        .range-header:hover .tooltip-icon::after,
+        .range-header:hover .tooltip-icon::before {
+            opacity: 1;
+        }
+        .kill-recency-text {
+            display: inline-block;
+            margin-right: 0.125rem;
+        }
+        .ship-type-text {
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
+        .ship-type-icon {
+            display: inline-block;
+            width: 1rem;
+            height: 1rem;
+            vertical-align: middle;
+            flex-shrink: 0;
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+            position: relative;
+            cursor: pointer;
+        }
+        .ship-type-icon[data-tooltip]::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: 50%;
+            bottom: calc(100% + 6px);
+            transform: translateX(-50%);
+            padding: 0.25rem 0.5rem;
+            background-color: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: normal;
+            line-height: 1.2;
+            white-space: nowrap;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0s;
+            z-index: 1000;
+        }
+        .ship-type-icon[data-tooltip]:hover::after {
+            opacity: 1;
+        }
+        #jump-clone-stations {
+            margin: 0;
+            padding-top: 0.375rem;
+            padding-bottom: 0.375rem;
+            padding-left: 0.625rem;
+            padding-right: 0.625rem;
+            background-color: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            display: none;
+            color: #e0e0e0;
+        }
+        #jump-clone-stations h2 {
+            margin: 0;
+            font-size: 1em;
+            font-weight: bold;
+            color: #dedede;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+        }
+        #jump-clone-stations h2:hover {
+            color: #6ab7ff;
+        }
+        #jump-clone-stations .toggle-icon {
+            display: inline-block;
+            transition: transform 0.2s ease;
+            font-size: 0.9em;
+        }
+        #jump-clone-stations.collapsed .toggle-icon {
+            transform: rotate(-90deg);
+        }
+        #jump-clone-stations .content {
+            overflow: hidden;
+            transition: max-height 0.3s ease, margin 0.3s ease;
+        }
+        #jump-clone-stations.collapsed .content {
+            max-height: 0;
+            margin: 0;
+            padding: 0;
+        }
+        #jump-clone-stations:not(.collapsed) .content {
+            max-height: 2000px;
+        }
+        /* Thera camps collapsible section - match Jump Clone Service Stations styling */
+        #thera-camps-container.thera-camps-collapsible {
+            margin: 0.9375rem 0;
+            padding-top: 0.375rem;
+            padding-bottom: 0.375rem;
+            padding-left: 0.625rem;
+            padding-right: 0.625rem;
+            background-color: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 4px;
+        }
+        #thera-camps-container .thera-camps-header {
+            margin: 0;
+            font-size: 1em;
+            font-weight: bold;
+            color: #dedede;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+        }
+        #thera-camps-container .thera-camps-header:hover {
+            color: #6ab7ff;
+        }
+        #thera-camps-container .thera-camps-header .toggle-icon {
+            color: #dedede;
+            display: inline-block;
+            transition: transform 0.2s ease;
+            font-size: 0.9em;
+        }
+        #thera-camps-container.thera-camps-collapsed .thera-camps-header .toggle-icon {
+            transform: rotate(-90deg);
+        }
+        #thera-camps-container .thera-camps-warning-icon {
+            color: #f0ad4e;
+        }
+        #thera-camps-container .thera-camps-content {
+            overflow: hidden;
+            transition: max-height 0.3s ease, margin 0.3s ease;
+        }
+        #thera-camps-container.thera-camps-collapsed .thera-camps-content {
+            max-height: 0;
+            margin: 0;
+            padding: 0;
+        }
+        #thera-camps-container:not(.thera-camps-collapsed) .thera-camps-content {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        /* Thera camps content is a scroll container; the base tooltip renders above
+           the hovered element which can get clipped by the container top edge. */
+        /* Disable the CSS pseudo-tooltip inside Thera; we render a floating tooltip via JS
+           so it is never clipped by the scroll container. */
+        #thera-camps-container .pilot-link[data-tooltip]::after,
+        #thera-camps-container .ship-type-icon[data-tooltip]::after {
+            opacity: 0 !important;
+        }
+        #thera-floating-tooltip {
+            position: fixed;
+            z-index: 2000;
+            pointer-events: none;
+            opacity: 0;
+            visibility: hidden;
+            padding: 0.25rem 0.5rem;
+            background-color: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: normal;
+            line-height: 1.4;
+            max-width: none;
+            white-space: nowrap;
+            text-align: left;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        }
+        #thera-floating-tooltip.is-visible {
+            opacity: 1;
+            visibility: visible;
+        }
+        #thera-camps-container .thera-camps-content .killmail-container {
+            margin-top: 0.375rem;
+        }
+        #jump-clone-stations .content ul {
+            margin: 0;
+            padding-left: 1.25rem;
+            padding-top: 0;
+        }
+        #jump-clone-stations .hub-name {
+            font-weight: normal;
+            color: #ffffff;
+        }
+        .hubs-jump-clones-table .hub-station-name {
+            font-weight: normal;
+            color: #aaa;
+            font-size: 0.9em;
+        }
+        .hubs-jump-clones-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.95em;
+        }
+        .hubs-jump-clones-table th,
+        .hubs-jump-clones-table td {
+            padding: 0.375rem 0 0.375rem 0.625rem;
+            text-align: left;
+            border-bottom: 1px solid #444;
+        }
+        .hubs-jump-clones-table th:last-child,
+        .hubs-jump-clones-table td:last-child {
+            padding-right: 0.625rem;
+        }
+        .hubs-jump-clones-table th {
+            color: #888;
+            font-weight: 600;
+        }
+        .hubs-jump-clones-table .station-with-btn {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .hubs-jump-clones-table .station-with-btn .station-text {
+            min-width: 0;
+        }
+        .hubs-jump-clones-table .station-with-btn .jump-clone-destination-btn {
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+        .hubs-jump-clones-loading,
+        .hubs-jump-clones-error {
+            color: #888;
+            padding: 0.5rem 0;
+        }
+        .hubs-jump-clones-error {
+            color: #c66;
+        }
+        .hubs-jump-clones-table .hub-checkbox {
+            padding-right: 0;
+            vertical-align: middle;
+        }
+        .hubs-jump-clones-table .hub-checkbox input {
+            cursor: pointer;
+            accent-color: #4fc3f7;
+            width: 0.875rem;
+            height: 0.875rem;
+        }
+        .jump-clone-destination-btn {
+            background-color: #3a3a3a;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        .jump-clone-destination-btn:hover {
+            background-color: #4a4a4a;
+            border-color: #666;
+        }
+        .jump-clone-destination-btn:active {
+            background-color: #2a2a2a;
+        }
+        .jump-clone-destination-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        #location-display {
+            margin: 0;
+            padding-top: 0.375rem;
+            padding-bottom: 0.375rem;
+            padding-left: 0.625rem;
+            padding-right: 0.625rem;
+            background-color: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            display: none;
+            color: #e0e0e0;
+        }
+        #location-display-banner {
+            display: none;
+        }
+        #location-display-banner-text {
+            color: #e0e0e0;
+            font-size: 1em;
+        }
+        #location-display-banner .proximity-login-link {
+            color: #6ab7ff;
+            margin-left: 0.375rem;
+        }
+        #location-display-banner .proximity-login-link:hover {
+            color: #8bc8ff;
+        }
+        #current-location-text a {
+            color: #6ab7ff;
+            font-weight: bold;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        #current-location-text a:hover {
+            color: #8bc8ff;
+            text-decoration: underline;
+        }
+        .stargate-system-name {
+            color: #6ab7ff;
+        }
+        /* Filter controls */
+        #security-filters {
+            display: flex;
+            align-items: center;
+            gap: 0.9375rem;
+            margin: 0.625rem 0;
+        }
+        #security-filters label {
+            display: flex;
+            align-items: center;
+            gap: 0.3125rem;
+            cursor: pointer;
+        }
+        #security-filters input[type="checkbox"] {
+            cursor: pointer;
+            width: 0.875rem;
+            height: 0.875rem;
+        }
+        @media (max-width: 770px) {
+            #security-filters {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.5rem;
+            }
+            .hubs-jump-clones-table .station-with-btn {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+        .trade-hub-filter-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            margin: 0 0.375rem 0 0;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            color: #888;
+            line-height: 1;
+            vertical-align: middle;
+            flex-shrink: 0;
+        }
+        .trade-hub-filter-btn:hover {
+            color: #ccc;
+        }
+        .trade-hub-filter-btn.active {
+            color: #4fc3f7;
+        }
+        .trade-hub-filter-btn svg {
+            display: block;
+            width: 0.875rem;
+            height: 0.875rem;
+        }
+        .trade-hub-filter-btn svg path {
+            fill: currentColor;
+        }
+        #security-filters .filter-hint-icons {
+            display: none;
+            align-items: center;
+            gap: 0.25rem;
+            margin-left: 0.125rem;
+        }
+        #security-filters .filter-hint-icons.is-visible {
+            display: inline-flex;
+        }
+        #security-filters .filter-hint-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+            line-height: 1;
+            cursor: help;
+        }
+        #security-filters .filter-hint-warning {
+            color: #FFA500;
+        }
+        #security-filters #filter-gatecamps-running-icon svg {
+            width: 0.875rem;
+            height: 0.875rem;
+            display: block;
+        }
+        #security-filters #filter-gatecamps-running-icon svg * {
+            fill: #4fc3f7 !important;
+            stroke: #4fc3f7 !important;
+        }
+        /* Hidden rows for filtering */
+        #result tr.filtered-out {
+            display: none;
+        }
+        /* Trade hub system name styling */
+        #result td a.trade-hub {
+            font-weight: bold;
+            /* Color will be set inline by JavaScript based on security status */
+        }
+        #eve-login-button:hover {
+            opacity: 0.9;
+        }
+        #logout-button:hover {
+            color: #8bc8ff;
+            text-decoration: underline;
+        }
+        /* Header: title left, auth top right */
+        #app-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            box-sizing: border-box;
+            gap: 1rem;
+            margin: 0.625rem 0;
+            flex-shrink: 0;
+        }
+        #app-header h1 {
+            margin: 0;
+        }
+        #auth-container {
+            display: flex;
+            align-items: center;
+            margin: 0;
+            margin-left: auto;
+        }
+        #auth-logged-in {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 0.625rem;
+        }
+        #character-portrait {
+            width: 40px;
+            height: 40px;
+            border-radius: 4px;
+            border: 1px solid #444;
+            object-fit: cover;
+            flex-shrink: 0;
+        }
+        /* CCP disclaimer footer (inside scrollable table container) */
+        #ccp-disclaimer {
+            padding: 0.75rem 0 0.5rem 0;
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+            color: #888;
+            line-height: 1.4;
+        }
+        #toast-container {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            pointer-events: none;
+        }
+        .toast {
+            min-width: 240px;
+            max-width: 420px;
+            background: rgba(20, 20, 20, 0.95);
+            color: #fff;
+            border: 1px solid #555;
+            border-left: 4px solid #d9534f;
+            border-radius: 6px;
+            padding: 0.625rem 0.75rem;
+            font-size: 0.9rem;
+            line-height: 1.35;
+            opacity: 0;
+            transform: translateY(-6px);
+            transition: opacity 180ms ease, transform 180ms ease;
+        }
+        .toast.toast-show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .toast.toast-info {
+            border-left-color: #6ab7ff;
+        }
+    </style>
+</head>
+<body>
+    <template id="pilot-running-icon-template">[[.PilotRunningIconHTML]]</template>
+    <template id="pilot-standing-icon-template">[[.PilotStandingIconHTML]]</template>
+    <template id="pilot-filter-icon-template">[[.FilterIconHTML]]</template>
+    <script>
+// Auth state embedded by server (no status request needed)
+window.__auth = JSON.parse(atob("[[.AuthBase64]]"));
+// API base URL: injected by Docker entrypoint from API_URL env.
+// Empty or "/api" = same-domain (nginx proxies /api to backend); full URL = separate backend (we append /api).
+function getApiBase() {
+  const apiUrl = (typeof window.APP_CONFIG !== 'undefined' && window.APP_CONFIG.apiUrl !== undefined) ? window.APP_CONFIG.apiUrl : "";
+  if (apiUrl === "" || apiUrl === null || apiUrl === undefined) return "/api";
+  return apiUrl.replace(/\/$/, "") + "/api";
+}
+const apiBase = getApiBase();
+
+// Log level: DEBUG logs only when LOG_LEVEL=DEBUG (injected via APP_CONFIG.logLevel or fetched from /api/config)
+const logLevel = (typeof window.APP_CONFIG !== 'undefined' && window.APP_CONFIG.logLevel)
+  ? window.APP_CONFIG.logLevel.toUpperCase()
+  : "INFO";
+
+function debugLog(...args) {
+  if (logLevel === "DEBUG") {
+    console.log(...args);
+  }
+}
+
+function showToast(message, type = "error", durationMs = 4500) {
+  if (!message) return;
+  let container = document.getElementById("toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toast-container";
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement("div");
+  toast.className = `toast ${type === "info" ? "toast-info" : ""}`.trim();
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  requestAnimationFrame(() => toast.classList.add("toast-show"));
+  setTimeout(() => {
+    toast.classList.remove("toast-show");
+    setTimeout(() => {
+      toast.remove();
+    }, 200);
+  }, durationMs);
+}
+
+const Config = {
+  endpoints: {
+    systemsSearch: `${apiBase}/systems/search`,
+    nearTradeHubs: `${apiBase}/near_trade_hubs.html`,
+    proximity: `${apiBase}/proximity.html`,
+    authLocation: `${apiBase}/auth/location`,
+    authLogin: `${apiBase}/auth/login`,
+    authLogout: `${apiBase}/auth/logout`,
+    authWaypoint: `${apiBase}/auth/waypoint`,
+  }
+};
+
+// Per-mode cache of table HTML; restored when switching back to a mode
+const modeResultsCache = {
+  near_trade_hubs: null,
+  proximity: null
+};
+
+// True after first handleModeChange() from initial load (so we don't fetch near_trade_hubs on load)
+let initialLoadDone = false;
+
+// Store current location to restore when switching back to proximity mode
+let currentLocationData = null; // { systemID, systemName }
+
+// Helper function to slide toggle an element
+function slideToggle(element, duration = 200) {
+  if (!element) return;
+  
+  const isHidden = element.classList.contains('hidden') ||
+                   window.getComputedStyle(element).display === 'none';
+  
+  if (isHidden) {
+    element.classList.remove('hidden');
+    
+    // Temporarily make element invisible but still in layout flow to measure
+    const originalVisibility = element.style.visibility;
+    element.style.visibility = 'hidden';
+    element.style.display = 'block';
+    element.style.maxHeight = 'none';
+    element.style.height = 'auto';
+    
+    // Force layout calculation
+    element.offsetHeight;
+    
+    // Measure the actual rendered height
+    const rect = element.getBoundingClientRect();
+    const height = rect.height;
+    
+    // Reset visibility and prepare for animation
+    // Use max-height which works better with padding/borders
+    element.style.visibility = originalVisibility;
+    element.style.maxHeight = '0px';
+    element.style.overflow = 'hidden';
+    element.style.transition = `max-height ${duration}ms ease`;
+    
+    // Force reflow to ensure max-height: 0 is applied
+    element.offsetHeight;
+    
+    // Animate to target height
+    element.style.maxHeight = height + 'px';
+    
+    setTimeout(() => {
+      element.style.maxHeight = '';
+      element.style.overflow = '';
+      element.style.transition = '';
+      element.style.display = 'block'; // Keep display: block to prevent collapse
+    }, duration);
+  } else {
+    // Measure current height
+    const rect = element.getBoundingClientRect();
+    const height = rect.height;
+    
+    element.style.maxHeight = height + 'px';
+    element.style.overflow = 'hidden';
+    element.style.transition = `max-height ${duration}ms ease`;
+    
+    // Force reflow
+    element.offsetHeight;
+    
+    element.style.maxHeight = '0px';
+    
+    setTimeout(() => {
+      element.classList.add('hidden');
+      element.style.maxHeight = '';
+      element.style.overflow = '';
+      element.style.transition = '';
+      element.style.display = ''; // Remove inline style, let CSS handle it
+    }, duration);
+  }
+}
+
+// DOM Ready Handler
+document.addEventListener('DOMContentLoaded', () => {
+  debugLog("CLIENT: DOM ready, initializing application");
+  // Check if we just came back from authentication
+  const urlParams = new URLSearchParams(window.location.search);
+  const isAuthRedirect = urlParams.get('auth') === 'success';
+  if (isAuthRedirect) {
+    // Remove the query parameter from URL
+    window.history.replaceState({}, document.title, window.location.pathname);
+    debugLog("CLIENT: Detected successful authentication redirect");
+  }
+  
+  initializeApplication().catch(error => {
+    console.error("CLIENT: Initialization failed:", error);
+  });
+  
+  // Handle page reload UI issues
+  handlePageReload();
+  
+});
+
+function handlePageReload() {
+  // Check if there's a saved mode in localStorage
+  const savedMode = localStorage.getItem('evePvpSearchMode');
+  if (savedMode) {
+    const modeInput = document.querySelector(`input[name='mode'][value='${savedMode}']`);
+    if (modeInput) {
+      modeInput.checked = true;
+    }
+  }
+  
+  // Restore checkbox and filter state
+  restoreFilterState();
+  
+  // Check if we just came back from authentication
+  const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('auth') === 'success') {
+    // Remove the query parameter from URL
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+  // Mode display and load are handled once in initializeApplication() to avoid duplicate popups
+}
+
+async function initializeApplication() {
+  try {
+    ensureCcpFooterExists(); // Footer is sibling of result-container so visible even with no results or unauthenticated
+    await loadInitialData();
+    bindEventHandlers();
+    // Set up auth button URLs
+    setupAuthButtons();
+    // Apply auth state from server-embedded data (no network request)
+    const isAuthenticated = applyAuthFromPage();
+    // Initialize mode selection (for proximity mode this may show login popup or load table)
+    await handleModeChange();
+    initialLoadDone = true; // Allow fetch when user later switches to near_trade_hubs from another mode
+    // Ensure buttons are shown/hidden correctly after mode change (in case cached data was restored)
+    // Use requestAnimationFrame to ensure DOM updates are complete
+    requestAnimationFrame(() => {
+      if (isAuthenticated) {
+        showSetDestinationButtons();
+      } else {
+        hideSetDestinationButtons();
+      }
+    });
+    // Table load for trade-hubs and proximity is already done in handleModeChange()
+  } catch (error) {
+    console.error("Initialization failed:", error);
+  }
+}
+
+// Set up authentication button URLs to point to backend
+function setupAuthButtons() {
+  const loginButton = document.getElementById("eve-login-button");
+  const logoutButton = document.getElementById("logout-button");
+  
+  if (loginButton) {
+    loginButton.href = Config.endpoints.authLogin;
+  }
+  
+  if (logoutButton) {
+    logoutButton.href = Config.endpoints.authLogout;
+  }
+}
+
+// Apply auth state from server-embedded data (no network request)
+function applyAuthFromPage() {
+  const data = window.__auth || { authenticated: false };
+  const loggedOutDiv = document.getElementById("auth-logged-out");
+  const loggedInDiv = document.getElementById("auth-logged-in");
+  const characterNameSpan = document.getElementById("character-name");
+  const characterPortrait = document.getElementById("character-portrait");
+
+  if (data.authenticated) {
+    if (loggedOutDiv) loggedOutDiv.style.display = "none";
+    if (loggedInDiv) loggedInDiv.style.display = "flex";
+    const characterID = data.characterID ?? data.character_id;
+    if (characterNameSpan) {
+      const name = data.characterName || data.character_name || (characterID ? `Character ${characterID}` : "Character");
+      characterNameSpan.textContent = name;
+    }
+    if (characterPortrait && characterID) {
+      const portraitUrl = `https://images.evetech.net/characters/${characterID}/portrait?size=64`;
+      if (characterPortrait.src !== portraitUrl) {
+        characterPortrait.src = portraitUrl;
+      }
+      characterPortrait.alt = characterNameSpan ? characterNameSpan.textContent : "Character portrait";
+      characterPortrait.style.display = "block";
+      characterPortrait.onerror = function() { this.style.display = "none"; };
+    }
+    showSetDestinationButtons();
+  } else {
+    if (loggedOutDiv) loggedOutDiv.style.display = "block";
+    if (loggedInDiv) loggedInDiv.style.display = "none";
+    if (characterPortrait) {
+      characterPortrait.src = "";
+      characterPortrait.alt = "";
+      characterPortrait.style.display = "none";
+    }
+    hideSetDestinationButtons();
+  }
+  return !!data.authenticated;
+}
+
+async function loadInitialData() {
+  // No initial data loading needed
+}
+
+
+function bindEventHandlers() {
+  debugLog("CLIENT: Binding event handlers");
+  const modeInputs = document.querySelectorAll("input[name='mode']");
+  modeInputs.forEach(input => {
+    input.addEventListener("change", handleModeChange);
+  });
+
+  // Handle jump clone stations toggle
+  const jumpCloneStations = document.getElementById("jump-clone-stations");
+  if (jumpCloneStations) {
+    const header = jumpCloneStations.querySelector("h2");
+    if (header) {
+      header.addEventListener("click", function() {
+        jumpCloneStations.classList.toggle("collapsed");
+      });
+    }
+  }
+
+  // Handle Thera camps section toggle
+  const theraCampsContainer = document.getElementById("thera-camps-container");
+  if (theraCampsContainer) {
+    ensureShipTypeIconsUseWikiLinks(theraCampsContainer);
+    const theraCampsHeader = theraCampsContainer.querySelector(".thera-camps-header");
+    if (theraCampsHeader) {
+      theraCampsHeader.addEventListener("click", function() {
+        theraCampsContainer.classList.toggle("thera-camps-collapsed");
+      });
+    }
+    bindTheraFloatingTooltips(theraCampsContainer);
+  }
+
+  // Jump clone table is always server-rendered; only bind buttons and wire up checkboxes (no client fetch)
+  bindJumpCloneDestinationButtons();
+  document.querySelectorAll(".trade-hub-checkbox").forEach(cb => {
+    cb.addEventListener("change", function() {
+      const term = this.getAttribute("data-trade-hub");
+      if (!term) return;
+      if (this.checked) {
+        hiddenTradeHubs.delete(term);
+      } else {
+        hiddenTradeHubs.add(term);
+      }
+      applySecurityFilters();
+    });
+  });
+  const hubsJumpClonesLoading = document.getElementById("hubs-jump-clones-loading");
+  if (hubsJumpClonesLoading) hubsJumpClonesLoading.style.display = "none";
+
+  // Handle distance cell clicks to show/hide routes (using event delegation)
+  document.addEventListener("click", function(e) {
+    // Check if the clicked element or its parent is the distance-value
+    let distanceValue = null;
+    if (e.target && e.target.classList.contains("distance-value")) {
+      distanceValue = e.target;
+    } else if (e.target && e.target.closest(".distance-value")) {
+      distanceValue = e.target.closest(".distance-value");
+    }
+    
+    if (distanceValue) {
+      // Use closest("td") to find the table cell, which is more robust than parentElement
+      const cell = distanceValue.closest("td");
+      if (cell) {
+        const routeContainer = cell.querySelector(".route-container");
+        if (routeContainer) {
+          slideToggle(routeContainer, 200);
+        }
+      }
+    }
+
+    const pilotFilterBtn = e.target && e.target.closest && e.target.closest(".pilot-hide-systems-btn");
+    if (pilotFilterBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = pilotFilterBtn.getAttribute("data-character-id");
+      if (!id) return;
+      if (pilotOnlyCharacterIds.has(id)) {
+        pilotOnlyCharacterIds.delete(id);
+      } else {
+        pilotOnlyCharacterIds.add(id);
+      }
+      document.querySelectorAll(`.pilot-hide-systems-btn[data-character-id="${id}"]`).forEach(btn => {
+        const on = pilotOnlyCharacterIds.has(id);
+        btn.setAttribute("aria-pressed", on ? "true" : "false");
+        btn.classList.toggle("active", on);
+        btn.setAttribute("title", on ? "Clear filter (show all systems again)" : "Show only systems where this pilot appears");
+        btn.setAttribute("aria-label", on ? "Pilot filter active. Click to show all systems again." : "Show only systems where this pilot appears as an attacker");
+      });
+      applySecurityFilters();
+      return;
+    }
+
+    const tradeHubFilterBtn = e.target && e.target.closest && e.target.closest(".trade-hub-filter-btn");
+    if (tradeHubFilterBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const term = (tradeHubFilterBtn.getAttribute("data-trade-hub-filter") || "").trim().toLowerCase();
+      if (!term) return;
+
+      // Collect all trade hub names from checkboxes (preferred) or filter buttons (fallback).
+      const allHubs = new Set();
+      document.querySelectorAll(".trade-hub-checkbox").forEach(cb => {
+        const t = cb.getAttribute("data-trade-hub");
+        if (t) allHubs.add(t);
+      });
+      if (allHubs.size === 0) {
+        document.querySelectorAll(".trade-hub-filter-btn").forEach(btn => {
+          const t = (btn.getAttribute("data-trade-hub-filter") || "").trim().toLowerCase();
+          if (t) allHubs.add(t);
+        });
+      }
+
+      // Single-select: if every hub except this one is already hidden → show all.
+      // Otherwise → show only this hub.
+      let onlyThisShown = allHubs.size > 1;
+      for (const h of allHubs) {
+        if (h !== term && !hiddenTradeHubs.has(h)) {
+          onlyThisShown = false;
+          break;
+        }
+      }
+
+      if (onlyThisShown) {
+        hiddenTradeHubs.clear();
+      } else {
+        for (const h of allHubs) {
+          if (h !== term) {
+            hiddenTradeHubs.add(h);
+          } else {
+            hiddenTradeHubs.delete(h);
+          }
+        }
+      }
+
+      syncTradeHubCheckboxes();
+      applySecurityFilters();
+      return;
+    }
+
+    // Handle attackers list toggle using event delegation (works with dynamically updated content)
+    const attackersToggle = e.target && e.target.closest && e.target.closest(".attackers-toggle");
+    if (attackersToggle) {
+      e.preventDefault();
+      e.stopPropagation();
+      const targetId = attackersToggle.getAttribute("data-target");
+      const targetElement = document.getElementById(targetId);
+      if (targetElement) {
+        const isCurrentlyVisible = targetElement.style.display !== 'none' &&
+                                   window.getComputedStyle(targetElement).display !== 'none';
+        attackersToggle.textContent = isCurrentlyVisible ? "(hide)" : "(show)";
+        slideToggle(targetElement, 200);
+      }
+      return;
+    }
+    
+    // Handle anchor links to system rows - prevent default scroll and scroll manually
+    if (e.target && e.target.tagName === 'A' && e.target.getAttribute('href') && e.target.getAttribute('href').startsWith('#system-')) {
+      e.preventDefault();
+      const targetId = e.target.getAttribute('href').substring(1); // Remove #
+      const targetElement = document.getElementById(targetId);
+      if (targetElement) {
+        // Scroll to element smoothly without changing URL hash
+        targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  });
+
+  // Keyboard accessibility for pilot filter toggles rendered as icon spans.
+  document.addEventListener("keydown", function(e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const toggle = e.target && e.target.closest && e.target.closest(".pilot-hide-systems-btn");
+    if (!toggle) return;
+    e.preventDefault();
+    toggle.click();
+  });
+
+  // Bind security filter checkboxes
+  const filterLowsec = document.getElementById("filter-lowsec");
+  const filterNullsec = document.getElementById("filter-nullsec");
+  const filterGatecamps = document.getElementById("filter-gatecamps");
+  
+  if (filterLowsec) {
+    filterLowsec.addEventListener("change", applySecurityFilters);
+  }
+  if (filterNullsec) {
+    filterNullsec.addEventListener("change", applySecurityFilters);
+  }
+  if (filterGatecamps) {
+    filterGatecamps.addEventListener("change", applySecurityFilters);
+  }
+  const filterBlobs = document.getElementById("filter-blobs");
+  if (filterBlobs) {
+    filterBlobs.addEventListener("change", applySecurityFilters);
+  }
+  debugLog("CLIENT: Event handlers bound");
+}
+
+function bindTheraFloatingTooltips(theraCampsContainer) {
+  if (!theraCampsContainer) return;
+
+  // Avoid binding twice on hot reload / repeated initializeApplication calls.
+  if (theraCampsContainer.dataset.floatingTooltipsBound === "true") return;
+  theraCampsContainer.dataset.floatingTooltipsBound = "true";
+
+  let tooltipEl = document.getElementById("thera-floating-tooltip");
+  if (!tooltipEl) {
+    tooltipEl = document.createElement("div");
+    tooltipEl.id = "thera-floating-tooltip";
+    tooltipEl.setAttribute("role", "tooltip");
+    tooltipEl.setAttribute("aria-hidden", "true");
+    document.body.appendChild(tooltipEl);
+  }
+
+  const tooltipTargets = theraCampsContainer.querySelectorAll(".pilot-link[data-tooltip], .ship-type-icon[data-tooltip]");
+  if (!tooltipTargets || tooltipTargets.length === 0) return;
+
+  const scroller = theraCampsContainer.querySelector(".thera-camps-content");
+  const margin = 6;        // vertical gap between icon and tooltip
+  const sidePadding = 8;  // viewport left/right padding for clamping
+  const minTopGap = 4;
+
+  let activeTarget = null;
+  let hideTimer = null;
+
+  function clamp(val, min, max) {
+    return Math.max(min, Math.min(max, val));
+  }
+
+  function positionTooltipFor(target) {
+    if (!target) return;
+
+    const text = (target.getAttribute("data-tooltip") || "").trim();
+    if (!text) return;
+
+    tooltipEl.textContent = text;
+    tooltipEl.style.maxWidth = "none";
+    tooltipEl.classList.add("is-visible");
+
+    // Measure after it becomes visible.
+    const tipRect = tooltipEl.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    const preferAbove = targetRect.top >= tipRect.height + margin + minTopGap;
+    const topAbove = targetRect.top - tipRect.height - margin;
+    const topBelow = targetRect.bottom + margin;
+
+    const top = preferAbove ? topAbove : topBelow;
+
+    // Center horizontally relative to the icon, then clamp to viewport.
+    const desiredLeft = targetRect.left + (targetRect.width / 2) - (tipRect.width / 2);
+    const left = clamp(desiredLeft, sidePadding, vw - tipRect.width - sidePadding);
+
+    // If both above and below go off-screen, clamp top anyway.
+    const clampedTop = clamp(top, sidePadding, vh - tipRect.height - sidePadding);
+
+    tooltipEl.style.left = `${left}px`;
+    tooltipEl.style.top = `${clampedTop}px`;
+    tooltipEl.style.position = "fixed";
+  }
+
+  function show(target) {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+    activeTarget = target;
+    tooltipEl.setAttribute("aria-hidden", "false");
+    positionTooltipFor(target);
+  }
+
+  function scheduleHide() {
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      activeTarget = null;
+      tooltipEl.classList.remove("is-visible");
+      tooltipEl.setAttribute("aria-hidden", "true");
+    }, 60); // small delay to avoid flicker when moving between elements
+  }
+
+  tooltipTargets.forEach(target => {
+    target.addEventListener("mouseenter", () => show(target));
+    target.addEventListener("mouseleave", () => {
+      if (activeTarget === target) scheduleHide();
+    });
+  });
+
+  // Keep tooltip aligned while scrolling the Thera block.
+  if (scroller) {
+    scroller.addEventListener("scroll", () => {
+      if (!activeTarget) return;
+      positionTooltipFor(activeTarget);
+    });
+  }
+
+  window.addEventListener("resize", () => {
+    if (!activeTarget) return;
+    positionTooltipFor(activeTarget);
+  });
+}
+
+// Fetch and display current location when authenticated
+async function fetchAndSetCurrentLocation() {
+  try {
+    debugLog("CLIENT: Fetching current location from:", Config.endpoints.authLocation);
+    const response = await fetch(Config.endpoints.authLocation, {
+      credentials: 'include' // Include cookies in cross-origin requests
+    });
+    if (!response.ok) {
+      if (response.status === 401) {
+        // Not authenticated or token expired
+        debugLog("CLIENT: Not authenticated, cannot fetch location");
+        hideLocationDisplay();
+        return null;
+      }
+      const errorText = await response.text();
+      console.error("CLIENT: Failed to fetch location:", response.status, errorText);
+      throw new Error("Failed to fetch location");
+    }
+    const data = await response.json();
+    debugLog("CLIENT: Location data received:", data);
+    if (data.systemID && data.systemName) {
+      // Display the location
+      showLocationDisplay(data.systemName, data.systemID);
+      debugLog(`CLIENT: Current location: ${data.systemName} (${data.systemID})`);
+      return data; // Return location data for use
+    } else {
+      console.warn("CLIENT: Location data missing systemID or systemName:", data);
+      hideLocationDisplay();
+      return null;
+    }
+  } catch (error) {
+    console.error("CLIENT: Error fetching current location:", error);
+    hideLocationDisplay();
+    return null;
+  }
+}
+
+// Show location display (current system name, optionally as link to zkillboard)
+function showLocationDisplay(systemName, systemID) {
+  const locationDisplay = document.getElementById("location-display");
+  const locationRow = document.getElementById("location-display-location");
+  const bannerRow = document.getElementById("location-display-banner");
+  const locationText = document.getElementById("current-location-text");
+
+  if (locationDisplay && locationText) {
+    if (systemID) {
+      currentLocationData = { systemID, systemName };
+      const a = document.createElement("a");
+      a.href = `https://zkillboard.com/system/${systemID}/`;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = systemName;
+      a.title = "View on zKillboard";
+      locationText.innerHTML = "";
+      locationText.appendChild(a);
+    } else {
+      locationText.innerHTML = "";
+      locationText.textContent = systemName;
+    }
+    if (locationRow) locationRow.style.display = "";
+    if (bannerRow) bannerRow.style.display = "none";
+    locationDisplay.style.display = "block";
+  }
+}
+
+const PROXIMITY_LOGIN_BANNER_DEFAULT = "Please log in to use proximity mode with your current location.";
+
+// Show banner in location area (e.g. "Please log in to use proximity mode")
+function showProximityLoginBanner(message, showLoginLink = true) {
+  const locationDisplay = document.getElementById("location-display");
+  const locationRow = document.getElementById("location-display-location");
+  const bannerRow = document.getElementById("location-display-banner");
+  const bannerText = document.getElementById("location-display-banner-text");
+  const loginLink = document.getElementById("location-display-login-link");
+
+  if (!locationDisplay || !bannerRow || !bannerText) return;
+
+  const text = (message && String(message).trim()) ? message : PROXIMITY_LOGIN_BANNER_DEFAULT;
+  bannerText.textContent = text;
+  if (loginLink) {
+    loginLink.style.display = showLoginLink ? "inline" : "none";
+    if (showLoginLink) loginLink.href = Config.endpoints.authLogin;
+  }
+  if (locationRow) locationRow.style.display = "none";
+  bannerRow.style.display = "block";
+  locationDisplay.style.display = "block";
+}
+
+// Hide location display (and banner)
+function hideLocationDisplay() {
+  const locationDisplay = document.getElementById("location-display");
+  if (locationDisplay) {
+    locationDisplay.style.display = "none";
+  }
+}
+
+async function handleModeChange() {
+  const modeTabs = document.querySelector(".mode-tabs");
+  const modeInputs = document.querySelectorAll("input[name='mode']");
+  try {
+    if (modeTabs) modeTabs.classList.add("loading");
+    modeInputs.forEach(input => { input.disabled = true; });
+
+  // Save the selected mode to localStorage
+  const checkedMode = document.querySelector("input[name='mode']:checked");
+  const mode = checkedMode ? checkedMode.value : null;
+  if (mode) {
+    localStorage.setItem('evePvpSearchMode', mode);
+  }
+
+  // Don't display results from another mode: hide the table container
+  const resultContainer = document.getElementById("result-container");
+  if (resultContainer) {
+    resultContainer.style.display = "none";
+  }
+
+  const jumpCloneStations = document.getElementById("jump-clone-stations");
+
+  // Configure controls based on mode
+  if (mode === "near_trade_hubs") {
+    if (jumpCloneStations) jumpCloneStations.style.display = "block"; // Show jump clone stations list in trade hubs mode
+    hideLocationDisplay();
+
+    // Always fetch fresh data for near_trade_hubs mode
+    if (initialLoadDone) {
+      // User switched to near_trade_hubs (e.g. from proximity); fetch so we don't show the other mode's table
+      await handleCheckClick();
+    } else {
+      // Initial load - check if we have server-rendered table
+      const resultTable = document.getElementById("result");
+      const resultTbody = resultTable && resultTable.querySelector("tbody");
+      const hasServerTable = resultTbody && resultTbody.querySelectorAll("tr").length > 0;
+      if (hasServerTable) {
+        ensureTableExists();
+        const resultThead = resultTable.querySelector("thead");
+        if (resultThead && resultTbody) {
+          modeResultsCache.near_trade_hubs = {
+            thead: resultThead.innerHTML,
+            tbody: resultTbody.innerHTML
+          };
+          applySecurityStatusClasses();
+          applySecurityFilters();
+          initializeSorting();
+          bindWaypointButtons();
+          const isAuthenticated = applyAuthFromPage();
+          if (isAuthenticated) showSetDestinationButtons();
+          else hideSetDestinationButtons();
+        }
+        const rc = document.getElementById("result-container");
+        if (rc) rc.style.display = "block";
+        requestAnimationFrame(() => {
+          scrollTableToTop(rc);
+        });
+      } else {
+        // Initial load with no server table (e.g. empty result); show container with CCP footer
+        ensureTableExists();
+        const rc = document.getElementById("result-container");
+        if (rc) rc.style.display = "block";
+      }
+    }
+  } else {
+    // Proximity mode
+    if (jumpCloneStations) jumpCloneStations.style.display = "none"; // Hide jump clone stations list in Proximity mode
+
+    // Always fetch fresh data for proximity mode
+    // Show banner immediately (no await) so the container doesn't blink after auth check
+    showProximityLoginBanner("Please log in to use proximity mode with your current location.", false);
+    const isAuthenticated = applyAuthFromPage();
+    if (isAuthenticated) {
+      hideLocationDisplay();
+      if (currentLocationData) showLocationDisplay(currentLocationData.systemName, currentLocationData.systemID);
+      await handleCheckClick();
+    } else {
+      // Show container with empty table + footer so footer is visible when not authenticated
+      ensureTableExists();
+      ensureCcpFooterExists();
+      // Clear table so we don't show near_trade_hubs data from previous mode
+      const resultTable = document.getElementById("result");
+      if (resultTable) {
+        const thead = resultTable.querySelector("thead");
+        const tbody = resultTable.querySelector("tbody");
+        if (thead) thead.innerHTML = "";
+        if (tbody) tbody.innerHTML = "";
+      }
+      const rc = document.getElementById("result-container");
+      if (rc) rc.style.display = "block";
+    }
+  }
+  } finally {
+    modeInputs.forEach(input => { input.disabled = false; });
+    if (modeTabs) modeTabs.classList.remove("loading");
+  }
+}
+
+
+
+/** Reset page and table-container scroll so the table is shown from the top. Call after DOM updates. */
+function scrollTableToTop(container) {
+  if (container) {
+    container.scrollTop = 0;
+  }
+  window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+}
+
+function ensureCcpFooterExists() {
+  // Footer at bottom of table (inside result-container); visible when table is empty too
+  if (document.getElementById("ccp-disclaimer")) return;
+  const container = document.getElementById("result-container");
+  if (!container) return;
+  const footer = document.createElement("footer");
+  footer.id = "ccp-disclaimer";
+  footer.textContent = "© 2014 CCP hf. All rights reserved. EVE Online and the EVE logo are trademarks or registered trademarks of CCP hf. All rights are reserved worldwide. All other trademarks are the property of their respective owners. EVE Online, the EVE logo, EVE and all associated logos and designs are the intellectual property of CCP hf. All artwork, screenshots, characters, vehicles, storylines, world facts or other recognizable features of the intellectual property relating to these trademarks are likewise the intellectual property of CCP hf. CCP hf. has granted permission to Eve PvP Radar to use EVE Online and all associated logos and designs for promotional and informational purposes on its website but does not endorse, and is not in any way affiliated with, Eve PvP Radar. CCP is in no way responsible for the content on or functioning of this website, nor can it be liable for any damage arising from the use of this website.";
+  container.appendChild(footer);
+}
+
+function ensureTableExists() {
+  // Create table if it doesn't exist
+  let resultTable = document.getElementById("result");
+  if (!resultTable) {
+    // Check if container already exists
+    let container = document.getElementById("result-container");
+    let createdContainer = false;
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "result-container";
+      createdContainer = true;
+    }
+    
+    const table = document.createElement("table");
+    table.id = "result";
+    const thead = document.createElement("thead");
+    const tbody = document.createElement("tbody");
+    tbody.id = "notes";
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    // Insert table before footer so footer stays at bottom (container may have footer from server empty state)
+    const existingFooter = container.querySelector("#ccp-disclaimer");
+    container.insertBefore(table, existingFooter);
+    ensureCcpFooterExists();
+    const securityFilters = document.getElementById("security-filters");
+    // Keep existing DOM order (Thera camps above result container) when container already exists.
+    // Only place the container in the layout when we created it from scratch.
+    if (createdContainer && securityFilters && securityFilters.parentElement) {
+      securityFilters.parentElement.insertBefore(container, securityFilters.nextSibling);
+    }
+    } else {
+    // Table exists, ensure it's in a container and has footer
+    let container = document.getElementById("result-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "result-container";
+      resultTable.parentElement.insertBefore(container, resultTable);
+      container.appendChild(resultTable);
+    }
+    ensureCcpFooterExists();
+  }
+}
+
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
+function escapeAttr(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function clearDestinationSuccessState(button) {
+  if (!button) return;
+  button.textContent = "Set destination";
+  button.style.backgroundColor = "";
+  button.style.color = "";
+  button.disabled = false;
+  button.removeAttribute("data-success");
+}
+
+function clearAllDestinationSuccessStates(exceptButton) {
+  const buttons = document.querySelectorAll(".set-destination-btn, .jump-clone-destination-btn");
+  buttons.forEach(button => {
+    if (button !== exceptButton && button.getAttribute("data-success") === "true") {
+      clearDestinationSuccessState(button);
+    }
+  });
+}
+
+
+async function fetchNearTradeHubs() {
+  // Near trade hubs mode: fetch trade hubs with target systems that have recent kills
+  debugLog("CLIENT: fetchNearTradeHubs called");
+  debugLog("CLIENT: Fetching near trade hubs");
+  try {
+    // Fetch HTML table from server
+    const response = await fetch(Config.endpoints.nearTradeHubs);
+    if (!response.ok) {
+      throw new Error("Fetch failed");
+    }
+    const html = await response.text();
+    
+    // Ensure table exists before using it
+    ensureTableExists();
+    
+    // Parse the HTML and extract table content
+    // Try parsing as full HTML document first
+    const parser = new DOMParser();
+    let doc = parser.parseFromString(html, "text/html");
+    
+    let newTable = doc.querySelector('table') || (doc.body && doc.body.querySelector('table'));
+    
+    // If table not found, try parsing as a table fragment by wrapping it
+    if (!newTable) {
+      const wrappedHtml = `<html><body>${html}</body></html>`;
+      doc = parser.parseFromString(wrappedHtml, "text/html");
+      newTable = doc.querySelector('table');
+    }
+    
+    if (!newTable) {
+      console.error("CLIENT: No table found in HTML response");
+      ensureTableExists();
+      const container = document.getElementById("result-container");
+      if (container) container.style.display = "block";
+      return;
+    }
+    
+    const resultTable = document.getElementById("result");
+    if (!resultTable) return;
+    
+    const container = document.getElementById("result-container");
+    
+    // Update table headers
+    const newThead = newTable.querySelector('thead');
+    const resultThead = resultTable.querySelector('thead');
+    if (newThead && resultThead) {
+      resultThead.innerHTML = newThead.innerHTML;
+    }
+    
+    // Replace tbody content
+    const newTbody = newTable.querySelector('tbody');
+    const resultTbody = resultTable.querySelector('tbody');
+    if (newTbody && resultTbody) {
+      const rowCount = newTbody.querySelectorAll('tr').length;
+      
+      // Check if there are any data rows
+      if (rowCount === 0) {
+        // Show container with empty table and CCP footer
+        if (container) container.style.display = "block";
+        clearPilotOnlyFilter();
+        resultTbody.innerHTML = newTbody.innerHTML;
+        modeResultsCache.near_trade_hubs = null;
+      } else {
+        // Show container and update tbody content
+        // Clear any hash from URL to prevent scrolling to anchors
+        if (window.location.hash) {
+          history.replaceState(null, null, window.location.pathname + window.location.search);
+        }
+        if (container) container.style.display = "block";
+        clearPilotOnlyFilter();
+        resultTbody.innerHTML = newTbody.innerHTML;
+        modeResultsCache.near_trade_hubs = {
+          thead: resultThead ? resultThead.innerHTML : "",
+          tbody: resultTbody.innerHTML
+        };
+      }
+    } else {
+      console.error("CLIENT: No tbody found in HTML response");
+      if (container) container.style.display = "block";
+      modeResultsCache.near_trade_hubs = null;
+    }
+    
+    // Re-bind event handlers for route display (already handled by event delegation)
+    ensureShipTypeIconsUseWikiLinks(document.getElementById("thera-camps-container"));
+    // Apply security status classes and filters
+    applySecurityStatusClasses();
+    applySecurityFilters();
+    
+    // Initialize sorting
+    initializeSorting();
+    
+    // Bind waypoint buttons and update visibility based on auth status
+    bindWaypointButtons();
+    // Wait for auth status check to complete before showing/hiding buttons
+    const isAuthenticated = applyAuthFromPage();
+    if (isAuthenticated) {
+      showSetDestinationButtons();
+    } else {
+      hideSetDestinationButtons();
+    }
+
+  } catch (error) {
+    console.error("CLIENT: Fetch error for near trade hubs:", error);
+    ensureTableExists();
+    const container = document.getElementById("result-container");
+    if (container) container.style.display = "block";
+  }
+}
+
+async function fetchProximity() {
+  debugLog("CLIENT: Fetching proximity systems for current character location");
+  try {
+    const response = await fetch(Config.endpoints.proximity, {
+      credentials: 'include'
+    });
+    if (response.status === 401) {
+      showProximityLoginBanner("Please log in to use proximity mode with your current location.", false);
+      modeResultsCache.proximity = null;
+      ensureTableExists();
+      const container = document.getElementById("result-container");
+      if (container) container.style.display = "block";
+      return;
+    }
+    if (!response.ok) {
+      throw new Error("Fetch failed");
+    }
+    const html = await response.text();
+    
+    // Ensure table exists before using it
+    ensureTableExists();
+    
+    // Parse the HTML and extract proximity-meta (character location) and table content
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, "text/html");
+    const metaDiv = doc.getElementById("proximity-meta");
+    let startSystemId = null;
+    let startSystemName = null;
+    if (metaDiv) {
+      startSystemId = parseInt(metaDiv.getAttribute("data-system-id"), 10);
+      startSystemName = metaDiv.getAttribute("data-system-name");
+      if (startSystemId && startSystemName) {
+        showLocationDisplay(startSystemName, startSystemId);
+      }
+    }
+    const newTable = doc.querySelector('table') || (doc.body && doc.body.querySelector('table'));
+    
+    if (!newTable) {
+      console.error("CLIENT: No table found in HTML response");
+      ensureTableExists();
+      const container = document.getElementById("result-container");
+      if (container) container.style.display = "block";
+      return;
+    }
+    
+    const resultTable = document.getElementById("result");
+    if (!resultTable) return;
+    
+    const container = document.getElementById("result-container");
+    
+    // Update table headers
+    const newThead = newTable.querySelector('thead');
+    const resultThead = resultTable.querySelector('thead');
+    if (newThead && resultThead) {
+      resultThead.innerHTML = newThead.innerHTML;
+    }
+    
+    // Replace tbody content
+    const newTbody = newTable.querySelector('tbody');
+    const resultTbody = resultTable.querySelector('tbody');
+    if (newTbody && resultTbody) {
+      const rowCount = newTbody.querySelectorAll('tr').length;
+      
+      // Check if there are any data rows
+      if (rowCount === 0) {
+        // Show container with empty table and CCP footer
+        if (container) container.style.display = "block";
+        clearPilotOnlyFilter();
+        resultTbody.innerHTML = newTbody.innerHTML;
+        modeResultsCache.proximity = null;
+      } else {
+        // Show container and update tbody content
+        // Clear any hash from URL to prevent scrolling to anchors
+        if (window.location.hash) {
+          history.replaceState(null, null, window.location.pathname + window.location.search);
+        }
+        if (container) container.style.display = "block";
+        clearPilotOnlyFilter();
+        resultTbody.innerHTML = newTbody.innerHTML;
+        modeResultsCache.proximity = {
+          thead: resultThead ? resultThead.innerHTML : "",
+          tbody: resultTbody.innerHTML,
+          systemId: startSystemId || undefined
+        };
+      }
+    } else {
+      console.error("CLIENT: No tbody found in HTML response");
+      if (container) container.style.display = "block";
+      modeResultsCache.proximity = null;
+    }
+
+    ensureCcpFooterExists();
+
+    // Re-bind event handlers for route display (already handled by event delegation)
+    ensureShipTypeIconsUseWikiLinks(document.getElementById("thera-camps-container"));
+    // Apply security status classes and filters
+    applySecurityStatusClasses();
+    applySecurityFilters();
+    
+    // Initialize sorting
+    initializeSorting();
+    
+    // Bind waypoint buttons and update visibility based on auth status
+    bindWaypointButtons();
+    // Wait for auth status check to complete before showing/hiding buttons
+    const isAuthenticated = applyAuthFromPage();
+    if (isAuthenticated) {
+      showSetDestinationButtons();
+    } else {
+      hideSetDestinationButtons();
+    }
+
+  } catch (error) {
+    console.error("CLIENT: Fetch error for proximity systems:", error);
+    ensureTableExists();
+    const container = document.getElementById("result-container");
+    if (container) container.style.display = "block";
+  }
+}
+
+function bindAttackersToggleHandlers() {
+  // Legacy function kept for API compatibility; event delegation handles this now.
+}
+
+async function handleCheckClick() {
+  const checkedMode = document.querySelector("input[name='mode']:checked");
+  const mode = checkedMode ? checkedMode.value : null;
+    debugLog("CLIENT: Mode:", mode);
+    if (mode === "near_trade_hubs") {
+      await fetchNearTradeHubs()
+        .catch(error => {
+          console.error("CLIENT: Error fetching near trade hubs:", error);
+        });
+    } else {
+      // Proximity mode - backend fetches character location from ESI and returns proximity data
+      await fetchProximity()
+        .catch(error => {
+          console.error("CLIENT: Error fetching proximity systems:", error);
+        });
+    }
+}
+
+// Security color mapping based on security values
+const securityColorMap = {
+  1.0: "#2E74DF",
+  0.9: "#3B9CEC",
+  0.8: "#49D0F1",
+  0.7: "#5CDCA6",
+  0.6: "#72E352",
+  0.5: "#EEFF83",
+  0.4: "#E06A0B",
+  0.3: "#CE4610",
+  0.2: "#BC1211",
+  0.1: "#6C2222",
+  0.0: "#8D3263"
+};
+
+/** Same as backend displayEveSecurityForUI: 0 < truesec < 0.1 → display 0.1 lowsec. */
+function displayEveSecurityForUI(s) {
+  if (s < 0) return 0;
+  if (s === 0 || Object.is(s, -0)) return 0;
+  if (s < 0.1) return 0.1;
+  return Math.round(s * 10) / 10;
+}
+
+// Get color for a security value with interpolation
+function getSecurityColor(securityValue) {
+  const displayed = displayEveSecurityForUI(securityValue);
+  const clamped = Math.max(0.0, displayed);
+  
+  // Round to nearest 0.1 for lookup
+  const rounded = Math.round(clamped * 10) / 10;
+  
+  // If exact match, return it
+  if (securityColorMap.hasOwnProperty(rounded)) {
+    return securityColorMap[rounded];
+  }
+  
+  // Interpolate between nearest two values
+  const lower = Math.floor(clamped * 10) / 10;
+  const upper = Math.ceil(clamped * 10) / 10;
+  
+  // Ensure bounds
+  const lowerKey = Math.max(0.0, lower);
+  const upperKey = Math.min(1.0, upper);
+  
+  if (lowerKey === upperKey) {
+    return securityColorMap[lowerKey] || securityColorMap[0.0];
+  }
+  
+  const lowerColor = securityColorMap[lowerKey] || securityColorMap[0.0];
+  const upperColor = securityColorMap[upperKey] || securityColorMap[1.0];
+  
+  // Interpolate between colors
+  const t = (clamped - lowerKey) / (upperKey - lowerKey);
+  return interpolateColor(lowerColor, upperColor, t);
+}
+
+// Interpolate between two hex colors
+function interpolateColor(color1, color2, t) {
+  const rgb1 = hexToRgb(color1);
+  const rgb2 = hexToRgb(color2);
+  
+  if (!rgb1 || !rgb2) return color1;
+  
+  const r = Math.round(rgb1.r + (rgb2.r - rgb1.r) * t);
+  const g = Math.round(rgb1.g + (rgb2.g - rgb1.g) * t);
+  const b = Math.round(rgb1.b + (rgb2.b - rgb1.b) * t);
+  
+  return `#${[r, g, b].map(x => {
+    const hex = x.toString(16);
+    return hex.length === 1 ? '0' + hex : hex;
+  }).join('')}`;
+}
+
+// Convert hex to RGB
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : null;
+}
+
+// Apply security status CSS classes and colors to table rows and route systems
+function applySecurityStatusClasses() {
+  const resultTable = document.getElementById("result");
+  if (!resultTable) return;
+
+  const rows = resultTable.querySelectorAll("tbody tr");
+  rows.forEach(row => {
+    // Remove existing security classes
+    row.classList.remove("system-lowsec", "system-nullsec", "system-highsec");
+    
+    // Get security value from the system cell (first cell with data-security)
+    const systemCell = row.querySelector("td[data-security]");
+    if (!systemCell) return;
+    
+    const securityValue = parseFloat(systemCell.getAttribute("data-security"));
+    if (isNaN(securityValue)) return;
+    
+    // Get color from mapping
+    const color = getSecurityColor(securityValue);
+    
+    // Apply background color to row (with transparency)
+    const rgb = hexToRgb(color);
+    if (rgb) {
+      // Use different opacity based on security type
+      if (securityValue <= 0.0) {
+        row.style.backgroundColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.2)`;
+        row.classList.add("system-nullsec");
+      } else if (securityValue < 0.45) {
+        row.style.backgroundColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.15)`;
+        row.classList.add("system-lowsec");
+      } else {
+        row.style.backgroundColor = "";
+        row.classList.add("system-highsec");
+      }
+    }
+    
+    // Classify system based on security status (for filtering)
+    // Highsec: >= 0.45, Lowsec: 0.1 to 0.4, Nullsec: <= 0.0
+    if (securityValue >= 0.45) {
+      row.classList.add("system-highsec");
+    } else if (securityValue > 0.0 && securityValue < 0.45) {
+      row.classList.add("system-lowsec");
+    } else if (securityValue <= 0.0) {
+      row.classList.add("system-nullsec");
+    }
+  });
+
+  // Colorize route system security numbers based on security status
+  const routeSecurityNumbers = resultTable.querySelectorAll(".route-security-number");
+  routeSecurityNumbers.forEach(securityNumber => {
+    // Get security value from data attribute (original value, not displayed value)
+    const securityValue = parseFloat(securityNumber.getAttribute("data-security"));
+    if (!isNaN(securityValue)) {
+      const color = getSecurityColor(securityValue);
+      securityNumber.style.color = color;
+    }
+  });
+}
+
+// Derive pilot icons from the server-injected templates (embedded from backend/static/*.svg at build time).
+// This avoids front-end SVG drift vs backend renderKillmailHTML.
+const pilotRunningSVGEl = document.getElementById("pilot-running-icon-template");
+const pilotStandingSVGEl = document.getElementById("pilot-standing-icon-template");
+const pilotRunningSVG = pilotRunningSVGEl ? (pilotRunningSVGEl.innerHTML || "").trim() : "";
+const pilotStandingSVG = pilotStandingSVGEl ? (pilotStandingSVGEl.innerHTML || "").trim() : "";
+
+/** When non-empty, only table rows (systems) where at least one of these pilots appears as an attacker stay visible. */
+const pilotOnlyCharacterIds = new Set();
+
+/** When a trade hub name is in this set, its rows are hidden in the main table. */
+let hiddenTradeHubs = new Set();
+
+const filterStateKey = 'evePvpSearchFilters';
+function saveFilterState() {
+  const filterLowsec = document.getElementById("filter-lowsec");
+  const filterNullsec = document.getElementById("filter-nullsec");
+  const filterGatecamps = document.getElementById("filter-gatecamps");
+  const filterBlobs = document.getElementById("filter-blobs");
+  const state = {
+    filterLowsec: filterLowsec ? filterLowsec.checked : true,
+    filterNullsec: filterNullsec ? filterNullsec.checked : true,
+    filterGatecamps: filterGatecamps ? filterGatecamps.checked : false,
+    filterBlobs: filterBlobs ? filterBlobs.checked : false,
+    hiddenTradeHubs: Array.from(hiddenTradeHubs)
+  };
+  try {
+    localStorage.setItem(filterStateKey, JSON.stringify(state));
+  } catch (e) {}
+}
+
+function restoreFilterState() {
+  try {
+    const saved = localStorage.getItem(filterStateKey);
+    if (!saved) return;
+    const state = JSON.parse(saved);
+    const filterLowsec = document.getElementById("filter-lowsec");
+    const filterNullsec = document.getElementById("filter-nullsec");
+    const filterGatecamps = document.getElementById("filter-gatecamps");
+    const filterBlobs = document.getElementById("filter-blobs");
+    if (filterLowsec && state.filterLowsec !== undefined) filterLowsec.checked = state.filterLowsec;
+    if (filterNullsec && state.filterNullsec !== undefined) filterNullsec.checked = state.filterNullsec;
+    if (filterGatecamps && state.filterGatecamps !== undefined) filterGatecamps.checked = state.filterGatecamps;
+    if (filterBlobs && state.filterBlobs !== undefined) filterBlobs.checked = state.filterBlobs;
+    if (Array.isArray(state.hiddenTradeHubs)) {
+      hiddenTradeHubs = new Set(state.hiddenTradeHubs);
+      syncTradeHubCheckboxes();
+    }
+  } catch (e) {}
+}
+
+function ensureGatecampFilterRunningIcon() {
+  const runningIconHost = document.getElementById("filter-gatecamps-running-icon");
+  if (!runningIconHost) return;
+  if (runningIconHost.dataset.iconReady === "true") return;
+  runningIconHost.innerHTML = pilotRunningSVG || "";
+  runningIconHost.dataset.iconReady = "true";
+}
+
+function buildGatecampHintTooltip(hiddenSystems) {
+  const base = "Warning: gatecamp filtering is currently hiding systems for your selected pilot filter.";
+  if (!hiddenSystems || hiddenSystems.length === 0) return base;
+  return `${base}\nHidden systems: ${hiddenSystems.join(", ")}`;
+}
+
+function getRowSystemDisplayName(row) {
+  if (!row) return "";
+  const dataName = (row.getAttribute("data-system-name") || "").trim();
+  if (dataName) return dataName;
+
+  const firstCell = row.querySelector("td:first-child");
+  if (!firstCell) return "";
+  const link = firstCell.querySelector("a");
+  const rawText = (link ? link.textContent : firstCell.textContent || "").trim();
+  if (!rawText) return "";
+
+  // First cell often contains "<SystemName> (<sec>)". Keep only the system name.
+  return rawText.replace(/\s*\([^)]*\)\s*$/, "").trim();
+}
+
+function updateGatecampFilterHintIconsVisibility(show, hiddenSystems) {
+  const hintIcons = document.getElementById("filter-gatecamps-hint-icons");
+  const warningIcon = document.getElementById("filter-gatecamps-warning-icon");
+  const runningIcon = document.getElementById("filter-gatecamps-running-icon-wrap");
+  if (!hintIcons) return;
+  hintIcons.classList.toggle("is-visible", !!show);
+  if (show) {
+    ensureGatecampFilterRunningIcon();
+    const tooltip = buildGatecampHintTooltip(hiddenSystems);
+    if (warningIcon) warningIcon.setAttribute("title", tooltip);
+    if (runningIcon) runningIcon.setAttribute("title", tooltip);
+  } else {
+    if (warningIcon) warningIcon.removeAttribute("title");
+    if (runningIcon) runningIcon.removeAttribute("title");
+  }
+}
+
+function clearPilotOnlyFilter() {
+  pilotOnlyCharacterIds.clear();
+}
+
+function ensureShipTypeIconsUseWikiLinks(container) {
+  if (!container) return;
+
+  // Safety net: ensure every ship icon in Thera camps resolves to EVE Uni.
+  // This covers cases where server/client markup updates accidentally place
+  // the icon inside a zKillboard link.
+  const icons = container.querySelectorAll(".ship-type-icon");
+  icons.forEach((icon) => {
+    // Already correctly wrapped.
+    const existingWikiLink = icon.closest("a[href*='wiki.eveuniversity.org']");
+    if (existingWikiLink) return;
+
+    // Derive ship name from nearby text.
+    const host = icon.closest("a, span, div") || icon.parentElement;
+    const shipText = host ? host.querySelector(".ship-type-text") : null;
+    const shipName = shipText ? (shipText.textContent || "").trim() : "";
+    if (!shipName || shipName === "Unknown ship") return;
+
+    const wikiTitle = shipName.replace(/\s+/g, "_");
+    const wikiURL = `https://wiki.eveuniversity.org/${encodeURIComponent(wikiTitle)}`;
+
+    const wikiLink = document.createElement("a");
+    wikiLink.href = wikiURL;
+    wikiLink.target = "_blank";
+    wikiLink.rel = "noopener noreferrer";
+    wikiLink.className = "ship-type-icon-link";
+
+    const currentLink = icon.closest("a");
+    if (currentLink) {
+      currentLink.parentNode.insertBefore(wikiLink, currentLink);
+    } else {
+      icon.parentNode.insertBefore(wikiLink, icon);
+    }
+    wikiLink.appendChild(icon);
+  });
+}
+
+function buildPilotMultiSystemTooltip(systemSet) {
+  if (!systemSet || systemSet.size <= 1) return "";
+  return "Pilot appears in multiple systems";
+}
+
+/** Base pilot tooltip; preserves ESI failure detail from server HTML. */
+function getPilotBaseTooltip(link, pilotName) {
+  if (link.getAttribute("data-pilot-unresolved") === "true") {
+    return (link.getAttribute("data-tooltip") || pilotName).trim();
+  }
+  return pilotName;
+}
+
+function ensurePilotIconWrapContent(link, iconHTML, id) {
+  // Multi-system icon is only visible inside the multi wrapper.
+  // When the multi wrapper exists but the icon span is missing (can happen
+  // when JS flips single->multi after filters), create it.
+  const wrap = link.closest("span.pilot-multi-system");
+  if (!wrap) return;
+
+  let iconWrap = wrap.querySelector(`.pilot-icon-wrap[data-character-id='${id}']`);
+  if (!iconWrap) {
+    iconWrap = wrap.querySelector(".pilot-icon-wrap");
+  }
+
+  if (!iconWrap) {
+    iconWrap = document.createElement("span");
+    iconWrap.className = "pilot-icon-wrap";
+    iconWrap.setAttribute("data-character-id", id);
+    // Insert right after ship-type link.
+    wrap.insertBefore(iconWrap, link.nextSibling);
+  } else {
+    iconWrap.setAttribute("data-character-id", id);
+  }
+
+  iconWrap.innerHTML = iconHTML;
+}
+
+/** Adjust running/standing pilot icons from rows that are actually visible (security filters use display:none). */
+function syncPilotMultiSystemHighlights() {
+  const table = document.getElementById("result");
+  if (!table) return;
+  // Without data-attacker-count (older server HTML), we cannot mirror the server's ≤5-attacker rule — skip.
+  if (!table.querySelector(".killmail-row[data-attacker-count]")) return;
+
+  const charToSystems = new Map();
+  // If pilot-only filtering is active, we intentionally include *all* systems in the map.
+  // Otherwise, hiding rows would make some pilots look single-system and flip running->standing icons.
+  const rowSelector = pilotOnlyCharacterIds.size > 0 ? "tbody tr" : "tbody tr:not(.filtered-out)";
+  for (const tr of table.querySelectorAll(rowSelector)) {
+    const sys = tr.getAttribute("data-system");
+    if (!sys) continue;
+    for (const km of tr.querySelectorAll(".killmail-row[data-attacker-count]")) {
+      // Count pilots regardless of attacker count so repeat pilots get the correct icon.
+      // (Icons are shown inside both collapsed and expanded attacker blocks.)
+      const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
+      for (const a of km.querySelectorAll("a[href*='/character/']")) {
+        const href = a.getAttribute("href") || "";
+        const m = href.match(/\/character\/(\d+)\//);
+        if (!m) continue;
+        const id = m[1];
+        if (!charToSystems.has(id)) charToSystems.set(id, new Set());
+        charToSystems.get(id).add(sys);
+      }
+    }
+  }
+
+  const wantMulti = (id) => {
+    if (pilotOnlyCharacterIds.has(id)) return true;
+    const s = charToSystems.get(id);
+    return !!(s && s.size > 1);
+  };
+
+  const links = Array.from(table.querySelectorAll("tbody a[href*='/character/']"));
+  for (const link of links) {
+    const href = link.getAttribute("href") || "";
+    const m = href.match(/\/character\/(\d+)\//);
+    if (!m) continue;
+
+    const id = m[1];
+    const multi = wantMulti(id);
+    const inMulti = !!link.closest("span.pilot-multi-system");
+
+    if (multi) {
+      if (!inMulti) {
+        const span = document.createElement("span");
+        span.className = "pilot-multi-system";
+        const parent = link.parentNode;
+        const iconWrap = parent ? parent.querySelector(`.pilot-icon-wrap[data-character-id='${id}']`) : null;
+        parent.insertBefore(span, link);
+        span.appendChild(link);
+        if (iconWrap) span.appendChild(iconWrap);
+      }
+      const wrap = link.closest("span.pilot-multi-system");
+      // Ensure the running-man icon exists and acts as the filter toggle.
+      ensurePilotIconWrapContent(link, pilotRunningSVG, id);
+
+      if (wrap) {
+        const iconWrap = wrap.querySelector(`.pilot-icon-wrap[data-character-id='${id}']`) || wrap.querySelector(".pilot-icon-wrap");
+        if (iconWrap) {
+          iconWrap.classList.add("pilot-hide-systems-btn");
+          iconWrap.dataset.characterId = id;
+          iconWrap.setAttribute("role", "button");
+          iconWrap.setAttribute("tabindex", "0");
+        }
+        const pressed = pilotOnlyCharacterIds.has(id);
+        if (iconWrap) {
+          iconWrap.setAttribute("aria-pressed", pressed ? "true" : "false");
+          iconWrap.classList.toggle("active", pressed);
+          iconWrap.setAttribute("title", pressed ? "Clear filter (show all systems again)" : "Show only systems where this pilot appears");
+          iconWrap.setAttribute("aria-label", pressed ? "Pilot filter active. Click to show all systems again." : "Show only systems where this pilot appears as an attacker");
+        }
+      }
+      const pilotName = (link.getAttribute("data-pilot-name") || "Pilot").trim();
+      if (!link.getAttribute("data-pilot-name")) {
+        link.setAttribute("data-pilot-name", pilotName);
+      }
+      const baseTooltip = getPilotBaseTooltip(link, pilotName);
+      const displayLabel = link.getAttribute("data-pilot-unresolved") === "true" ? baseTooltip : pilotName;
+      let extra = buildPilotMultiSystemTooltip(charToSystems.get(id));
+      if (!extra && pilotOnlyCharacterIds.has(id)) {
+        extra = "Pilot appears in multiple systems";
+      }
+      link.setAttribute("data-tooltip", extra ? `${baseTooltip}. ${extra}` : baseTooltip);
+      link.setAttribute("aria-label", extra ? `${displayLabel}. ${extra}` : displayLabel);
+    } else {
+      if (inMulti) {
+        const span = link.closest("span.pilot-multi-system");
+        const parent = span && span.parentNode;
+        if (parent) {
+          // Only move the standalone icon span (new markup). For old markup the icon lives inside the <a>.
+          const iconWrap = span.querySelector(`.pilot-icon-wrap[data-character-id='${id}']`);
+          const afterSpan = span.nextSibling;
+          parent.insertBefore(link, afterSpan);
+          if (iconWrap) parent.insertBefore(iconWrap, afterSpan);
+          span.remove();
+        }
+      }
+      const iconWrap = link.parentElement ? link.parentElement.querySelector(`.pilot-icon-wrap[data-character-id='${id}']`) : null;
+      if (iconWrap) {
+        iconWrap.classList.remove("pilot-hide-systems-btn", "active");
+        iconWrap.removeAttribute("data-character-id");
+        iconWrap.removeAttribute("aria-pressed");
+        iconWrap.removeAttribute("title");
+        iconWrap.removeAttribute("aria-label");
+        iconWrap.removeAttribute("role");
+        iconWrap.removeAttribute("tabindex");
+      }
+      const pilotName = (link.getAttribute("data-pilot-name") || "Pilot").trim();
+      const baseTooltip = getPilotBaseTooltip(link, pilotName);
+      const displayLabel = link.getAttribute("data-pilot-unresolved") === "true" ? baseTooltip : pilotName;
+      link.setAttribute("data-tooltip", baseTooltip);
+      link.setAttribute("aria-label", displayLabel);
+    }
+  }
+}
+
+// Apply security filters based on checkbox states
+function applySecurityFilters() {
+  const resultTable = document.getElementById("result");
+  if (!resultTable) {
+    updateGatecampFilterHintIconsVisibility(false);
+    return;
+  }
+
+  const checkedMode = document.querySelector("input[name='mode']:checked");
+  const mode = checkedMode ? checkedMode.value : null;
+
+  const filterLowsec = document.getElementById("filter-lowsec");
+  const filterNullsec = document.getElementById("filter-nullsec");
+  const filterGatecamps = document.getElementById("filter-gatecamps");
+  const filterBlobs = document.getElementById("filter-blobs");
+  
+  const showLowsec = filterLowsec ? filterLowsec.checked : true;
+  const showNullsec = filterNullsec ? filterNullsec.checked : true;
+  const hideGatecamps = filterGatecamps ? filterGatecamps.checked : false;
+  const hideBlobs = filterBlobs ? filterBlobs.checked : false;
+
+  const hasHiddenHubs = mode === "near_trade_hubs" && hiddenTradeHubs.size > 0;
+
+  // Keep trade hub filter icon state in sync with the current filter state.
+  resultTable.querySelectorAll(".trade-hub-filter-btn").forEach(btn => {
+    const btnTerm = (btn.getAttribute("data-trade-hub-filter") || "").trim().toLowerCase();
+    const isActive = hasHiddenHubs && !hiddenTradeHubs.has(btnTerm);
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+
+  let gatecampHidSelectedPilotRows = false;
+  const hiddenSystemsForSelectedPilots = new Set();
+
+  const rows = resultTable.querySelectorAll("tbody tr");
+  rows.forEach(row => {
+    // Remove filtered-out class first
+    row.classList.remove("filtered-out");
+    
+    // Check if row should be filtered out
+    let shouldHide = false;
+    
+    if (row.classList.contains("system-lowsec") && !showLowsec) {
+      shouldHide = true;
+    } else if (row.classList.contains("system-nullsec") && !showNullsec) {
+      shouldHide = true;
+    }
+    // Highsec systems are always shown (no filter for them)
+    
+    // Pilot-only filter: hide rows that do not include any selected pilot as attacker
+    if (!shouldHide && pilotOnlyCharacterIds.size > 0) {
+      let anyMatch = false;
+      for (const cid of pilotOnlyCharacterIds) {
+        if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
+          anyMatch = true;
+          break;
+        }
+      }
+      if (!anyMatch) {
+        shouldHide = true;
+      }
+    }
+
+    // Trade hub name filter (near_trade_hubs mode): hide rows whose hub is in the hidden set.
+    if (!shouldHide && hasHiddenHubs) {
+      const tradeHubCell = row.querySelector("td[data-trade-hub]");
+      const rowTradeHubName = tradeHubCell
+        ? ((tradeHubCell.getAttribute("data-trade-hub") || tradeHubCell.textContent || "").trim().toLowerCase())
+        : "";
+      if (rowTradeHubName && hiddenTradeHubs.has(rowTradeHubName)) {
+        shouldHide = true;
+      }
+    }
+
+    // Check for gatecamps on route (warning sign in distance cell)
+    if (!shouldHide && hideGatecamps) {
+      // Find the distance cell (usually the second or third cell depending on mode)
+      const cells = row.querySelectorAll("td");
+      let distanceCell = null;
+      
+      // Find the cell that contains the distance-value class
+      for (let i = 0; i < cells.length; i++) {
+        if (cells[i].querySelector(".distance-value")) {
+          distanceCell = cells[i];
+          break;
+        }
+      }
+      
+      // If distance cell has a route-warning-sign, hide this row
+      if (distanceCell && distanceCell.querySelector(".route-warning-sign")) {
+        shouldHide = true;
+        if (pilotOnlyCharacterIds.size > 0) {
+          for (const cid of pilotOnlyCharacterIds) {
+            if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
+              gatecampHidSelectedPilotRows = true;
+              const systemName = getRowSystemDisplayName(row);
+              if (systemName) hiddenSystemsForSelectedPilots.add(systemName);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // Hide blobs: rows with any killmail having >5 attackers
+    if (!shouldHide && hideBlobs) {
+      const killmailRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
+      for (const km of killmailRows) {
+        const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
+        if (n > 5) {
+          shouldHide = true;
+          break;
+        }
+      }
+    }
+    
+    if (shouldHide) {
+      row.classList.add("filtered-out");
+    }
+  });
+  const showGatecampHints = hideGatecamps && pilotOnlyCharacterIds.size > 0 && gatecampHidSelectedPilotRows;
+  updateGatecampFilterHintIconsVisibility(showGatecampHints, Array.from(hiddenSystemsForSelectedPilots));
+  saveFilterState();
+}
+
+function syncTradeHubCheckboxes() {
+  document.querySelectorAll(".trade-hub-checkbox").forEach(cb => {
+    const term = cb.getAttribute("data-trade-hub");
+    if (term) {
+      cb.checked = !hiddenTradeHubs.has(term);
+    }
+  });
+}
+
+// Initialize sorting functionality
+function initializeSorting() {
+  const resultTable = document.getElementById("result");
+  if (!resultTable) return;
+
+  const headers = resultTable.querySelectorAll("thead th");
+  headers.forEach((header, index) => {
+    // Skip Notes column (last column)
+    if (index === headers.length - 1) return;
+    
+    // Check if header text contains "Notes" (in case column order changes)
+    const headerText = header.textContent.trim();
+    if (headerText === "Notes" || headerText.includes("Notes")) return;
+    
+    // Make header sortable
+    header.classList.add("sortable");
+    
+    // Remove existing click handlers by cloning
+    const newHeader = header.cloneNode(true);
+    header.parentNode.replaceChild(newHeader, header);
+    
+    // Check if this is the Recency column in near_trade_hubs or proximity mode
+    // Recency is sorted ascending by default from the backend
+    const checkedMode = document.querySelector("input[name='mode']:checked");
+    const mode = checkedMode ? checkedMode.value : null;
+    if (headerText.includes("Recency") && (mode === "near_trade_hubs" || mode === "proximity")) {
+      newHeader.classList.add("sort-asc");
+    }
+    
+    newHeader.addEventListener("click", function() {
+      sortTable(index, newHeader);
+    });
+  });
+}
+
+// Sort table by column index
+function sortTable(columnIndex, header) {
+  const resultTable = document.getElementById("result");
+  if (!resultTable) return;
+
+  const tbody = resultTable.querySelector("tbody");
+  if (!tbody) return;
+
+  // Get all rows (including filtered ones, we'll handle them separately)
+  const rows = Array.from(tbody.querySelectorAll("tr"));
+  
+  // Determine sort direction
+  const isAscending = !header.classList.contains("sort-asc");
+  
+  // Remove sort classes from all headers
+  const allHeaders = resultTable.querySelectorAll("thead th");
+  allHeaders.forEach(h => {
+    h.classList.remove("sort-asc", "sort-desc");
+  });
+  
+  // Add sort class to current header
+  header.classList.add(isAscending ? "sort-asc" : "sort-desc");
+  
+  // Sort rows
+  rows.sort((a, b) => {
+    const aCell = a.cells[columnIndex];
+    const bCell = b.cells[columnIndex];
+    
+    if (!aCell || !bCell) return 0;
+    
+    const aValue = getCellValue(aCell, columnIndex);
+    const bValue = getCellValue(bCell, columnIndex);
+    
+    let comparison = 0;
+    
+    // Handle different data types
+    if (typeof aValue === "number" && typeof bValue === "number") {
+      comparison = aValue - bValue;
+    } else {
+      // String comparison
+      const aStr = String(aValue || "").toLowerCase();
+      const bStr = String(bValue || "").toLowerCase();
+      comparison = aStr.localeCompare(bStr);
+    }
+    
+    return isAscending ? comparison : -comparison;
+  });
+  
+  // Re-append sorted rows
+  rows.forEach(row => tbody.appendChild(row));
+  
+  // Re-apply security filters to maintain filter state
+  applySecurityFilters();
+}
+
+// Extract sortable value from cell
+function getCellValue(cell, columnIndex) {
+  const cellText = cell.textContent.trim();
+  
+  // Get header text to determine column type
+  const resultTable = document.getElementById("result");
+  if (!resultTable) return cellText;
+  
+  const headers = resultTable.querySelectorAll("thead th");
+  if (columnIndex >= headers.length) return cellText;
+  
+  const headerText = headers[columnIndex].textContent.trim();
+  
+  // Range column: extract numeric value, ignoring warning sign and suffixes
+  // Header can be "Range" or "Range\u00A0ⓘ" (backend uses NBSP before icon), so match any that starts with "Range"
+  if (headerText.startsWith("Range")) {
+    // Extract the first number from the cell text
+    // This handles cases like "⚠ 5 (Thera)" or "10 (Zarzakh)" or just "15"
+    const match = cellText.match(/(\d+)/);
+    if (match) {
+      return parseInt(match[1], 10);
+    }
+    return 0;
+  }
+  
+  // Recency column: check for data-recency attribute first
+  if (headerText.includes("Recency")) {
+    const recencyAttr = cell.getAttribute("data-recency");
+    if (recencyAttr) {
+      const recencyValue = parseInt(recencyAttr, 10);
+      if (!isNaN(recencyValue)) {
+        return recencyValue;
+      }
+    }
+    // Fallback to parsing text
+    const match = cellText.match(/(\d+)/);
+    if (match) {
+      return parseInt(match[1], 10);
+    }
+    return 0;
+  }
+  
+  // System or Trade Hub: use text content
+  // For system names, check if there's a link
+  const link = cell.querySelector("a");
+  if (link) {
+    return link.textContent.trim();
+  }
+  
+  return cellText;
+}
+
+// Bind jump clone station destination buttons to handle clicks
+function bindJumpCloneDestinationButtons() {
+  const buttons = document.querySelectorAll(".jump-clone-destination-btn");
+  buttons.forEach(button => {
+    // Remove existing listeners by cloning
+    const newButton = button.cloneNode(true);
+    button.parentNode.replaceChild(newButton, button);
+    
+    newButton.addEventListener("click", async function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Keep success result visible until user clicks to clear it.
+      if (newButton.getAttribute("data-success") === "true") {
+        clearDestinationSuccessState(newButton);
+        return;
+      }
+      
+      const systemID = parseInt(newButton.getAttribute("data-system-id"));
+      const systemName = newButton.getAttribute("data-system-name");
+      const stationIDAttr = newButton.getAttribute("data-station-id");
+      const stationID = stationIDAttr ? parseInt(stationIDAttr) : null;
+      
+      if (!systemID) {
+        console.error("CLIENT: Invalid system ID for jump clone destination");
+        return;
+      }
+      
+      debugLog("CLIENT: Setting jump clone destination - system:", systemName, "systemID:", systemID, "stationID:", stationID);
+      
+      // Disable button during request
+      newButton.disabled = true;
+      newButton.textContent = "Setting...";
+      
+      try {
+        // Set destination to the jump clone station (always clear waypoints first)
+        // Include station_id if available to set destination exactly to station
+        const waypointBody = { system_id: systemID, is_first: true };
+        if (stationID && stationID > 0) {
+          waypointBody.station_id = stationID;
+        }
+        const response = await fetch(Config.endpoints.authWaypoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify(waypointBody),
+        });
+        
+        if (!response.ok) {
+          if (response.status === 401) {
+            const errorText = await response.text();
+            showToast(errorText || "Please log in to set waypoints.");
+            return;
+          }
+          if (response.status === 409) {
+            const errorText = await response.text();
+            showToast(errorText || "Character is offline. Log into EVE Online and try again.");
+            clearDestinationSuccessState(newButton);
+            return;
+          }
+          const errorText = await response.text();
+          throw new Error(`Failed to set waypoint: ${response.status} - ${errorText}`);
+        }
+        
+        const data = await response.json();
+        if (data.success) {
+          clearAllDestinationSuccessStates(newButton);
+          // Show success feedback
+          newButton.textContent = "✓ Set!";
+          newButton.style.backgroundColor = "#4CAF50";
+          newButton.style.color = "white";
+          newButton.disabled = false;
+          newButton.setAttribute("data-success", "true");
+        } else {
+          throw new Error("Failed to set waypoint");
+        }
+      } catch (error) {
+        console.error("CLIENT: Error setting jump clone destination:", error);
+        showToast(`Failed to set destination to ${systemName}: ${error.message}`);
+        clearDestinationSuccessState(newButton);
+      }
+    });
+  });
+}
+
+// Bind waypoint buttons to handle clicks
+function bindWaypointButtons() {
+  const buttons = document.querySelectorAll(".set-destination-btn");
+  buttons.forEach(button => {
+    // Remove existing listeners by cloning
+    const newButton = button.cloneNode(true);
+    button.parentNode.replaceChild(newButton, button);
+    
+    newButton.addEventListener("click", async function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Keep success result visible until user clicks to clear it.
+      if (newButton.getAttribute("data-success") === "true") {
+        clearDestinationSuccessState(newButton);
+        return;
+      }
+      
+      const systemID = parseInt(newButton.getAttribute("data-system-id"));
+      const systemName = newButton.getAttribute("data-system-name");
+      const stationIDAttr = newButton.getAttribute("data-station-id");
+      const stationID = stationIDAttr ? parseInt(stationIDAttr) : null;
+      const viaThera = newButton.getAttribute("data-via-thera") === "true";
+      const routePathStr = newButton.getAttribute("data-route-path");
+      
+      if (!systemID) {
+        console.error("CLIENT: Invalid system ID for waypoint");
+        return;
+      }
+      
+      // Disable button during request
+      newButton.disabled = true;
+      newButton.textContent = "Setting...";
+
+      // Track whether we've already cleared waypoints in this click flow
+      let firstWaypointCleared = false;
+
+      try {
+        // If route goes through Thera, set destination twice:
+        // 1. First to the system with inbound Thera signature (system right before Thera in path)
+        // 2. Then to the target system
+        if (viaThera && routePathStr) {
+          const routePath = JSON.parse(routePathStr);
+          const TheraSystemID = 31000005; // Thera system ID
+          
+          // Find the system right before Thera in the route path
+          let theraInboundSystemID = null;
+          for (let i = 0; i < routePath.length - 1; i++) {
+            if (routePath[i + 1] === TheraSystemID) {
+              theraInboundSystemID = routePath[i];
+              break;
+            }
+          }
+          
+          if (theraInboundSystemID && theraInboundSystemID !== systemID) {
+            // First, set destination to the system with inbound Thera signature
+            // Mark this as the first waypoint so backend can clear other waypoints if needed
+            // Note: For Thera inbound system, we don't have station_id, so use system_id
+            const firstResponse = await fetch(Config.endpoints.authWaypoint, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              credentials: "include",
+              body: JSON.stringify({ system_id: theraInboundSystemID, is_first: true }),
+            });
+            
+            if (!firstResponse.ok) {
+              if (firstResponse.status === 401) {
+                const errorText = await firstResponse.text();
+                showToast(errorText || "Please log in to set waypoints.");
+                return;
+              }
+              if (firstResponse.status === 409) {
+                const errorText = await firstResponse.text();
+                showToast(errorText || "Character is offline. Log into EVE Online and try again.");
+                clearDestinationSuccessState(newButton);
+                return;
+              }
+              const errorText = await firstResponse.text();
+              throw new Error(`Failed to set first waypoint: ${firstResponse.status} - ${errorText}`);
+            }
+
+            // We cleared waypoints when setting this first leg
+            firstWaypointCleared = true;
+            
+            // Wait a bit before setting the second destination
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+        
+        // Set destination to the target system.
+        // If we already set a first waypoint in this flow (Thera inbound), don't clear again.
+        // Otherwise (single-destination click or routes without a separate first leg), clear existing waypoints first.
+        // Include station_id if available to set destination exactly to station
+        const waypointBody = { system_id: systemID, is_first: !firstWaypointCleared };
+        if (stationID) {
+          waypointBody.station_id = stationID;
+        }
+        const response = await fetch(Config.endpoints.authWaypoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify(waypointBody),
+        });
+        
+        if (!response.ok) {
+          if (response.status === 401) {
+            const errorText = await response.text();
+            showToast(errorText || "Please log in to set waypoints.");
+            return;
+          }
+          if (response.status === 409) {
+            const errorText = await response.text();
+            showToast(errorText || "Character is offline. Log into EVE Online and try again.");
+            clearDestinationSuccessState(newButton);
+            return;
+          }
+          const errorText = await response.text();
+          throw new Error(`Failed to set waypoint: ${response.status} - ${errorText}`);
+        }
+        
+        const data = await response.json();
+        if (data.success) {
+          clearAllDestinationSuccessStates(newButton);
+          // Show success feedback
+          newButton.textContent = "✓ Set!";
+          newButton.style.backgroundColor = "#4CAF50";
+          newButton.style.color = "white";
+          newButton.disabled = false;
+          newButton.setAttribute("data-success", "true");
+        } else {
+          throw new Error("Failed to set waypoint");
+        }
+      } catch (error) {
+        console.error("CLIENT: Error setting waypoint:", error);
+        showToast(`Failed to set destination to ${systemName}: ${error.message}`);
+        clearDestinationSuccessState(newButton);
+      }
+    });
+  });
+}
+
+// Show "Set destination" buttons when user is authenticated
+function showSetDestinationButtons() {
+  const buttons = document.querySelectorAll(".set-destination-btn");
+  buttons.forEach(button => {
+    // Use "block" so the button always appears below the system name (not beside it)
+    button.style.display = "block";
+  });
+  // Also show jump clone station destination buttons
+  const jumpCloneButtons = document.querySelectorAll(".jump-clone-destination-btn");
+  jumpCloneButtons.forEach(button => {
+    button.style.display = "inline-block";
+  });
+}
+
+// Hide "Set destination" buttons when user is not authenticated
+function hideSetDestinationButtons() {
+  const buttons = document.querySelectorAll(".set-destination-btn");
+  buttons.forEach(button => {
+    button.style.display = "none";
+  });
+  // Also hide jump clone station destination buttons
+  const jumpCloneButtons = document.querySelectorAll(".jump-clone-destination-btn");
+  jumpCloneButtons.forEach(button => {
+    button.style.display = "none";
+  });
+}
+</script>
+    <header id="app-header">
+        <h1>Eve PvP Radar</h1>
+        <div id="auth-container">
+            <div id="auth-logged-out" style="display: none;">
+                <a href="#" id="eve-login-button" style="display: inline-block; text-decoration: none;">
+                    <img src="[[.LoginImageLargeDataURI]]" 
+                         alt="Log in with EVE Online" 
+                         style="height: 45px; width: auto; border: none; cursor: pointer;"
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-block';">
+                    <span style="display: none; background-color: #1a1a1a; color: #e0e0e0; padding: 0.625rem 1.25rem; border: 2px solid #6ab7ff; border-radius: 4px; cursor: pointer; font-weight: bold;">Log in with EVE Online</span>
+                </a>
+            </div>
+            <div id="auth-logged-in" style="display: none;">
+                <img id="character-portrait" src="" alt="" style="display: none;">
+                <span id="character-name" style="color: #e0e0e0;"></span>
+                <a href="#" id="logout-button" style="color: #6ab7ff; text-decoration: none; cursor: pointer;">Logout</a>
+            </div>
+        </div>
+    </header>
+    <div id="jump-clone-stations" class="collapsed">
+        <h2>
+            <span class="toggle-icon">▼</span>
+            <span>Trade hubs</span>
+        </h2>
+        <div class="content">
+            <table id="hubs-jump-clones-table" class="hubs-jump-clones-table">
+                <thead>
+                    <tr>
+                        <th style="width: 1px;"></th>
+                        <th>Hub</th>
+                        <th>Closest jump clone station</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    [[.JumpCloneTableBody]]
+                </tbody>
+            </table>
+            <div id="hubs-jump-clones-loading" class="hubs-jump-clones-loading">Loading…</div>
+            <div id="hubs-jump-clones-error" class="hubs-jump-clones-error" style="display: none;"></div>
+        </div>
+    </div>
+    <div id="location-display">
+        <div id="location-display-location">
+            <span style="color: #888; margin-right: 0.5rem;">Current location:</span>
+            <span id="current-location-text" style="color: #6ab7ff; font-weight: bold;"></span>
+        </div>
+        <div id="location-display-banner">
+            <span id="location-display-banner-text">Please log in to use proximity mode with your current location.</span>
+            <a href="#" id="location-display-login-link" class="proximity-login-link" style="display: none;">Log in</a>
+        </div>
+    </div>
+    <div class="mode-row">
+        <div class="mode-tabs">
+            <label>
+                <input type="radio" name="mode" value="near_trade_hubs" checked>
+                <span>Near trade hubs</span>
+            </label>
+            <label>
+                <input type="radio" name="mode" value="proximity">
+                <span>In proximity</span>
+            </label>
+        </div>
+        <div class="mode-row-footer-links">
+            <a href="/legal.html" class="ccp-legal-link">Legal info</a>
+            [[if and .DonateURL .DonateText]]
+            <span class="footer-link-sep" aria-hidden="true">·</span>
+            <a href="[[.DonateURL]]" class="ccp-legal-link" rel="noopener noreferrer" target="_blank">[[.DonateText]]</a>
+            [[end]]
+        </div>
+    </div>
+    <div id="security-filters">
+        <label>
+            <input type="checkbox" id="filter-lowsec" checked>
+            <span>Lowsec</span>
+        </label>
+        <label>
+            <input type="checkbox" id="filter-nullsec" checked>
+            <span>Nullsec</span>
+        </label>
+        <label>
+            <input type="checkbox" id="filter-gatecamps">
+            <span>
+                Hide systems with gatecamps on route
+                <span class="filter-hint-icons" id="filter-gatecamps-hint-icons">
+                    <span class="filter-hint-icon filter-hint-warning" id="filter-gatecamps-warning-icon" role="img" aria-label="Warning icon">⚠</span>
+                    <span class="filter-hint-icon" id="filter-gatecamps-running-icon-wrap">
+                        <span id="filter-gatecamps-running-icon" aria-label="Running pilot icon"></span>
+                    </span>
+                </span>
+            </span>
+        </label>
+        <label>
+            <input type="checkbox" id="filter-blobs">
+            <span>Hide blobs (attackers &gt;5)</span>
+        </label>
+    </div>
+    [[.InitialTableHTML]]
+</body>
+</html>

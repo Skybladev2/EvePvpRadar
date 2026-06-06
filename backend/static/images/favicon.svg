@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 114.18413 114.20586">
+  <defs>
+    <linearGradient id="linearGradient4797">
+      <stop offset="0" style="stop-color:#59FF00;stop-opacity:1"/>
+      <stop offset="1" style="stop-color:#70ff09;stop-opacity:0"/>
+    </linearGradient>
+    <radialGradient id="radialGradient3927" gradientUnits="userSpaceOnUse" cx="66.922997" cy="73.452003" r="46.466999" gradientTransform="matrix(1.2160991,0,0,1.2160889,-17.60128,899.41748)">
+      <stop offset=".2" style="stop-color:#005800;stop-opacity:.8"/>
+    </radialGradient>
+    <filter id="filter3939" x="-0.37059" y="-0.34999999" width="1.7412" height="1.7">
+      <feGaussianBlur stdDeviation="0.66291261"/>
+    </filter>
+    <linearGradient xlink:href="#linearGradient4797" id="linearGradient4761-6" x1="-11.834038" y1="-21.27556" x2="-66.834038" y2="33.724438" gradientUnits="userSpaceOnUse" gradientTransform="matrix(0,-1.0275496,-1.0275496,0,42.384359,-4.61641)"/>
+    <linearGradient xlink:href="#linearGradient4797" id="linearGradient4761-6-3" x1="-11.834038" y1="-21.27556" x2="-66.275948" y2="11.549838" gradientUnits="userSpaceOnUse" gradientTransform="matrix(0.76912526,-0.68139881,-0.68139881,-0.76912526,100.69768,2.4846539)"/>
+  </defs>
+  <g transform="translate(-6.6911781,-931.63921)">
+    <path transform="translate(-1.65802e-8,924.36)" style="opacity:0.76399997;fill:url(#linearGradient4761-6);fill-opacity:1;stroke:none;stroke-width:0.50873929;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;paint-order:stroke markers fill" d="M 64.246055,7.543631 A 56.51523,56.51523 0 0 0 7.730829,64.058877 h 56.515226 z"/>
+    <circle cx="-654.04468" cy="744.2478" r="56.763" style="fill:#000000;stroke-width:1.20213342" transform="rotate(-45)"/>
+    <circle cx="63.783241" cy="988.74213" r="56.508499" style="opacity:0.76399997;fill:url(#radialGradient3927);stroke-width:1.19674349"/>
+  </g>
+  <g transform="translate(-6.6911781,-7.279206)">
+    <path style="opacity:0.89200003;fill:url(#linearGradient4761-6-3);fill-opacity:1;stroke:none;stroke-width:0.50873929;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;paint-order:stroke markers fill" d="M 106.09299,26.911917 A 56.51523,56.51523 0 0 0 26.314139,22.086972 l 37.47696,42.301873 z"/>
+  </g>
+  <g transform="translate(-6.6911781,-7.279206)">
+    <g>
+      <circle cx="63.783241" cy="64.382141" r="35" style="fill:none;stroke:#00ed00;stroke-width:3"/>
+      <circle cx="63.783241" cy="64.382141" r="13" style="fill:none;stroke:#00ed00;stroke-width:3"/>
+      <circle cx="63.783241" cy="64.382141" r="56" style="fill:none;stroke:#00ed00;stroke-width:3"/>
+    </g>
+  </g>
+  <g transform="translate(-6.6911781,-7.279206)">
+    <g style="opacity:0.872">
+      <ellipse cx="90" cy="40" rx="10" ry="10" style="fill:#70ff09;filter:url(#filter3939)"/>
+      <ellipse transform="matrix(0.76471,0,0,0.76471,-8.1629,10.36)" cx="55" cy="38" rx="4" ry="4" style="fill:url(#radialGradient882)"/>
+    </g>
+  </g>
+</svg>

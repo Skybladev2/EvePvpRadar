@@ -1,0 +1,129 @@
+services:
+  frontend:
+    image: ${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Frontend.dockerfile
+      args:
+        - DEBIAN_MIRROR=${DEBIAN_MIRROR:-http://deb.debian.org/debian}
+    depends_on:
+      backend:
+        condition: service_started
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "3"
+    ports:
+      - "${FRONTEND_PORT:-8888}:80"
+      - "${FRONTEND_METRICS_PORT:-9091}:8080"
+    restart: unless-stopped
+    environment:
+      # Empty or /api = same-origin (nginx proxies /api to backend); full URL = separate backend
+      - API_URL=${API_URL:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - RATELIMIT_GLOBAL_RPS=${RATELIMIT_GLOBAL_RPS:-400}
+      - RATELIMIT_PER_IP_RPS=${RATELIMIT_PER_IP_RPS:-5}
+      - RATELIMIT_PER_IP_10S=${RATELIMIT_PER_IP_10S:-30}
+      - RATELIMIT_BLOCK_SEC=${RATELIMIT_BLOCK_SEC:-3600}
+
+  nginx-exporter:
+    image: ${NGINX_EXPORTER_IMAGE_REPO:-nginx/nginx-prometheus-exporter}@${NGINX_EXPORTER_IMAGE_DIGEST:-sha256:bf76e58df548a13e52bd543ac70f6d3d667e14884e8b51c149bd81994ca75ccd}
+    container_name: nginx-exporter
+    command:
+      - -nginx.scrape-uri=http://frontend:8080/stub_status
+    depends_on:
+      frontend:
+        condition: service_started
+    ports:
+      - "9113:9113"
+    restart: unless-stopped
+
+  backend:
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Backend.dockerfile
+      args:
+        - IMAGE_TAG=${IMAGE_TAG}
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "3"
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+      - "${METRICS_PORT}:${METRICS_PORT}"
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - PORT=8080
+      - METRICS_PORT=${METRICS_PORT}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - USER_AGENT=${USER_AGENT}
+      - SOCKS5_PROXY=${SOCKS5_PROXY}
+      - MOCK_DATA=${MOCK_DATA}
+      - R2Z2_SLEEP_BETWEEN_MS=${R2Z2_SLEEP_BETWEEN_MS:-}
+      - R2Z2_SLEEP_ON_404_MS=${R2Z2_SLEEP_ON_404_MS:-}
+      # GODEBUG=netdns=2 is set automatically when LOG_LEVEL=DEBUG (see main.go)
+      - EVE_SSO_CLIENT_ID=${EVE_SSO_CLIENT_ID}
+      - EVE_SSO_CLIENT_SECRET=${EVE_SSO_CLIENT_SECRET}
+      - EVE_SSO_REDIRECT_URI=${EVE_SSO_REDIRECT_URI}
+      - EVE_SSO_FRONTEND_URL=${EVE_SSO_FRONTEND_URL}
+      - DONATE_URL=${DONATE_URL:-}
+      - DONATE_TEXT=${DONATE_TEXT:-}
+      - IMAGE_TAG=${IMAGE_TAG:-}
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE_REPO:-prom/prometheus}@${PROMETHEUS_IMAGE_DIGEST:-sha256:4a61322ac1103a0e3aea2a61ef1718422a48fa046441f299d71e660a3bc71ae9}
+    container_name: prometheus
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "3"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--storage.tsdb.retention.size=1GB'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: ${GRAFANA_IMAGE_REPO:-grafana/grafana}@${GRAFANA_IMAGE_DIGEST:-sha256:a604f143dbb145a16cd58d22b1451826ee59fcf9de561dc6d698b1de222272d0}
+    container_name: grafana
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "3"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_LOG_LEVEL=warn
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  # Prometheus storage limited to 1GB via --storage.tsdb.retention.size in command
+  prometheus-data:
+  # Grafana: Docker named volumes cannot be size-limited here; use a bind mount + OS quota if needed
+  grafana-data:
