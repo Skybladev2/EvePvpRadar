@@ -1689,9 +1689,9 @@ function bindEventHandlers() {
   if (filterGatecamps) {
     filterGatecamps.addEventListener("change", applySecurityFilters);
   }
-  const filterBlobs = document.getElementById("filter-blobs");
-  if (filterBlobs) {
-    filterBlobs.addEventListener("change", applySecurityFilters);
+  const filterMaxAttackers = document.getElementById("filter-max-attackers");
+  if (filterMaxAttackers) {
+    filterMaxAttackers.addEventListener("input", applySecurityFilters);
   }
   debugLog("CLIENT: Event handlers bound");
 }
@@ -2503,12 +2503,12 @@ function saveFilterState() {
   const filterLowsec = document.getElementById("filter-lowsec");
   const filterNullsec = document.getElementById("filter-nullsec");
   const filterGatecamps = document.getElementById("filter-gatecamps");
-  const filterBlobs = document.getElementById("filter-blobs");
+  const filterMaxAttackers = document.getElementById("filter-max-attackers");
   const state = {
     filterLowsec: filterLowsec ? filterLowsec.checked : true,
     filterNullsec: filterNullsec ? filterNullsec.checked : true,
     filterGatecamps: filterGatecamps ? filterGatecamps.checked : false,
-    filterBlobs: filterBlobs ? filterBlobs.checked : false,
+    maxAttackers: filterMaxAttackers ? parseInt(filterMaxAttackers.value, 10) : 5,
     hiddenTradeHubs: Array.from(hiddenTradeHubs)
   };
   try {
@@ -2524,11 +2524,11 @@ function restoreFilterState() {
     const filterLowsec = document.getElementById("filter-lowsec");
     const filterNullsec = document.getElementById("filter-nullsec");
     const filterGatecamps = document.getElementById("filter-gatecamps");
-    const filterBlobs = document.getElementById("filter-blobs");
+    const filterMaxAttackers = document.getElementById("filter-max-attackers");
     if (filterLowsec && state.filterLowsec !== undefined) filterLowsec.checked = state.filterLowsec;
     if (filterNullsec && state.filterNullsec !== undefined) filterNullsec.checked = state.filterNullsec;
     if (filterGatecamps && state.filterGatecamps !== undefined) filterGatecamps.checked = state.filterGatecamps;
-    if (filterBlobs && state.filterBlobs !== undefined) filterBlobs.checked = state.filterBlobs;
+    if (filterMaxAttackers && state.maxAttackers !== undefined) filterMaxAttackers.value = state.maxAttackers;
     if (Array.isArray(state.hiddenTradeHubs)) {
       hiddenTradeHubs = new Set(state.hiddenTradeHubs);
       syncTradeHubCheckboxes();
@@ -2794,12 +2794,12 @@ function applySecurityFilters() {
   const filterLowsec = document.getElementById("filter-lowsec");
   const filterNullsec = document.getElementById("filter-nullsec");
   const filterGatecamps = document.getElementById("filter-gatecamps");
-  const filterBlobs = document.getElementById("filter-blobs");
+  const filterMaxAttackers = document.getElementById("filter-max-attackers");
   
   const showLowsec = filterLowsec ? filterLowsec.checked : true;
   const showNullsec = filterNullsec ? filterNullsec.checked : true;
   const hideGatecamps = filterGatecamps ? filterGatecamps.checked : false;
-  const hideBlobs = filterBlobs ? filterBlobs.checked : false;
+  const maxAttackersValue = filterMaxAttackers ? parseInt(filterMaxAttackers.value, 10) : 5;
 
   const hasHiddenHubs = mode === "near_trade_hubs" && hiddenTradeHubs.size > 0;
 
@@ -2884,12 +2884,12 @@ function applySecurityFilters() {
       }
     }
 
-    // Hide blobs: rows with any killmail having >5 attackers
-    if (!shouldHide && hideBlobs) {
+    // Hide blobs: rows with any killmail having > maxAttackersValue attackers
+    if (!shouldHide) {
       const killmailRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
       for (const km of killmailRows) {
         const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
-        if (n > 5) {
+        if (n > maxAttackersValue) {
           shouldHide = true;
           break;
         }
@@ -3407,8 +3407,8 @@ function hideSetDestinationButtons() {
             </span>
         </label>
         <label>
-            <input type="checkbox" id="filter-blobs">
-            <span>Hide blobs (attackers &gt;5)</span>
+            <span>Max attackers:</span>
+            <input type="number" id="filter-max-attackers" min="1" max="100" value="5" style="width:60px;margin-left:4px">
         </label>
     </div>
     [[.InitialTableHTML]]
