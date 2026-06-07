@@ -3387,12 +3387,8 @@ function hideSetDestinationButtons() {
     </div>
     <div id="security-filters">
         <label>
-            <input type="checkbox" id="filter-lowsec" checked>
-            <span>Lowsec</span>
-        </label>
-        <label>
-            <input type="checkbox" id="filter-nullsec" checked>
-            <span>Nullsec</span>
+            <span>Max attackers:</span>
+            <input type="number" id="filter-max-attackers" min="1" max="100" value="5" style="width:60px;margin-left:4px">
         </label>
         <label>
             <input type="checkbox" id="filter-gatecamps">
@@ -3407,8 +3403,12 @@ function hideSetDestinationButtons() {
             </span>
         </label>
         <label>
-            <span>Max attackers:</span>
-            <input type="number" id="filter-max-attackers" min="1" max="100" value="5" style="width:60px;margin-left:4px">
+            <input type="checkbox" id="filter-lowsec" checked>
+            <span>Lowsec</span>
+        </label>
+        <label>
+            <input type="checkbox" id="filter-nullsec" checked>
+            <span>Nullsec</span>
         </label>
     </div>
     [[.InitialTableHTML]]
