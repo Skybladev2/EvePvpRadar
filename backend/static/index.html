@@ -389,6 +389,7 @@
             overflow-x: auto;
             margin: 0.625rem 0;
             -webkit-overflow-scrolling: touch; /* Smooth scrolling on mobile */
+            position: relative;
         }
         /* Mobile: ensure table is scrollable horizontally */
         @media (max-width: 768px) {
@@ -1142,6 +1143,51 @@
         /* Hidden rows for filtering */
         #result tr.filtered-out {
             display: none;
+        }
+        /* Filter indicator icon at top-left of table */
+        #filter-indicator {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 15;
+            cursor: pointer;
+            line-height: 1;
+        }
+        #filter-indicator svg {
+            display: block;
+            width: 16px;
+            height: 16px;
+            fill: #ff9800;
+            opacity: 0.85;
+            padding: 4px;
+        }
+        #filter-indicator:hover svg {
+            opacity: 1;
+        }
+        #filter-indicator-tooltip {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: #2a2a2a;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 6px 10px;
+            font-size: 12px;
+            color: #e0e0e0;
+            white-space: nowrap;
+            z-index: 30;
+            margin-top: 2px;
+            pointer-events: none;
+            line-height: 1.6;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        #filter-indicator:hover #filter-indicator-tooltip {
+            display: block;
+        }
+        .filter-indicator-tooltip-item {
+            white-space: nowrap;
         }
         /* Trade hub system name styling */
         #result td a.trade-hub {
@@ -2780,6 +2826,41 @@ function syncPilotMultiSystemHighlights() {
   }
 }
 
+// Update the filter indicator icon at the top-left corner of the table
+function updateFilterIndicator(counts) {
+  let indicator = document.getElementById("filter-indicator");
+  if (!indicator) {
+    const container = document.getElementById("result-container");
+    if (!container) return;
+    indicator = document.createElement("div");
+    indicator.id = "filter-indicator";
+    const filterTemplate = document.getElementById("pilot-filter-icon-template");
+    const filterSvg = filterTemplate ? (filterTemplate.innerHTML || "").trim() : "";
+    const iconSpan = document.createElement("span");
+    iconSpan.innerHTML = filterSvg || '<svg xmlns="http://www.w3.org/2000/svg" viewBox="8 8 48 48"><path d="m8 8 18.667 21.333v21.333l10.667 5.333V29.332L56.001 7.999h-24z"/></svg>';
+    indicator.appendChild(iconSpan);
+    const tooltip = document.createElement("div");
+    tooltip.id = "filter-indicator-tooltip";
+    indicator.appendChild(tooltip);
+    container.appendChild(indicator);
+  }
+  const tooltip = document.getElementById("filter-indicator-tooltip");
+  if (!tooltip) return;
+  const items = [];
+  if (counts.lowsec > 0) items.push("Lowsec: " + counts.lowsec + " system" + (counts.lowsec !== 1 ? "s" : "") + " hidden");
+  if (counts.nullsec > 0) items.push("Nullsec: " + counts.nullsec + " system" + (counts.nullsec !== 1 ? "s" : "") + " hidden");
+  if (counts.pilot > 0) items.push("Pilot filter: " + counts.pilot + " system" + (counts.pilot !== 1 ? "s" : "") + " hidden");
+  if (counts.tradeHub > 0) items.push("Trade hub filter: " + counts.tradeHub + " system" + (counts.tradeHub !== 1 ? "s" : "") + " hidden");
+  if (counts.gatecamps > 0) items.push("Gatecamp filter: " + counts.gatecamps + " system" + (counts.gatecamps !== 1 ? "s" : "") + " hidden");
+  if (counts.maxAttackers > 0) items.push("Max attackers filter: " + counts.maxAttackers + " system" + (counts.maxAttackers !== 1 ? "s" : "") + " hidden");
+  if (items.length > 0) {
+    tooltip.innerHTML = items.map(function(t) { return '<div class="filter-indicator-tooltip-item">' + t + "</div>"; }).join("");
+    indicator.style.display = "block";
+  } else {
+    indicator.style.display = "none";
+  }
+}
+
 // Apply security filters based on checkbox states
 function applySecurityFilters() {
   const resultTable = document.getElementById("result");
@@ -2814,12 +2895,65 @@ function applySecurityFilters() {
   let gatecampHidSelectedPilotRows = false;
   const hiddenSystemsForSelectedPilots = new Set();
 
+  // Independent counters for each filter type (for the indicator tooltip)
+  let hiddenByLowsec = 0;
+  let hiddenByNullsec = 0;
+  let hiddenByPilot = 0;
+  let hiddenByTradeHub = 0;
+  let hiddenByGatecamps = 0;
+  let hiddenByMaxAttackers = 0;
+
   const rows = resultTable.querySelectorAll("tbody tr");
   rows.forEach(row => {
     // Remove filtered-out class first
     row.classList.remove("filtered-out");
-    
-    // Check if row should be filtered out
+
+    // --- Count rows hidden by each filter independently ---
+
+    if (row.classList.contains("system-lowsec") && !showLowsec) hiddenByLowsec++;
+    if (row.classList.contains("system-nullsec") && !showNullsec) hiddenByNullsec++;
+
+    if (pilotOnlyCharacterIds.size > 0) {
+      let anyMatch = false;
+      for (const cid of pilotOnlyCharacterIds) {
+        if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
+          anyMatch = true;
+          break;
+        }
+      }
+      if (!anyMatch) hiddenByPilot++;
+    }
+
+    if (hasHiddenHubs) {
+      const tradeHubCell = row.querySelector("td[data-trade-hub]");
+      const rowTradeHubName = tradeHubCell
+        ? ((tradeHubCell.getAttribute("data-trade-hub") || tradeHubCell.textContent || "").trim().toLowerCase())
+        : "";
+      if (rowTradeHubName && hiddenTradeHubs.has(rowTradeHubName)) hiddenByTradeHub++;
+    }
+
+    if (hideGatecamps) {
+      const cells = row.querySelectorAll("td");
+      let distanceCell = null;
+      for (let i = 0; i < cells.length; i++) {
+        if (cells[i].querySelector(".distance-value")) {
+          distanceCell = cells[i];
+          break;
+        }
+      }
+      if (distanceCell && distanceCell.querySelector(".route-warning-sign")) hiddenByGatecamps++;
+    }
+
+    const killmailRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
+    for (const km of killmailRows) {
+      const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
+      if (n > maxAttackersValue) {
+        hiddenByMaxAttackers++;
+        break;
+      }
+    }
+
+    // --- Existing shouldHide logic (with short-circuit) unchanged ---
     let shouldHide = false;
     
     if (row.classList.contains("system-lowsec") && !showLowsec) {
@@ -2827,9 +2961,7 @@ function applySecurityFilters() {
     } else if (row.classList.contains("system-nullsec") && !showNullsec) {
       shouldHide = true;
     }
-    // Highsec systems are always shown (no filter for them)
     
-    // Pilot-only filter: hide rows that do not include any selected pilot as attacker
     if (!shouldHide && pilotOnlyCharacterIds.size > 0) {
       let anyMatch = false;
       for (const cid of pilotOnlyCharacterIds) {
@@ -2843,7 +2975,6 @@ function applySecurityFilters() {
       }
     }
 
-    // Trade hub name filter (near_trade_hubs mode): hide rows whose hub is in the hidden set.
     if (!shouldHide && hasHiddenHubs) {
       const tradeHubCell = row.querySelector("td[data-trade-hub]");
       const rowTradeHubName = tradeHubCell
@@ -2854,21 +2985,15 @@ function applySecurityFilters() {
       }
     }
 
-    // Check for gatecamps on route (warning sign in distance cell)
     if (!shouldHide && hideGatecamps) {
-      // Find the distance cell (usually the second or third cell depending on mode)
       const cells = row.querySelectorAll("td");
       let distanceCell = null;
-      
-      // Find the cell that contains the distance-value class
       for (let i = 0; i < cells.length; i++) {
         if (cells[i].querySelector(".distance-value")) {
           distanceCell = cells[i];
           break;
         }
       }
-      
-      // If distance cell has a route-warning-sign, hide this row
       if (distanceCell && distanceCell.querySelector(".route-warning-sign")) {
         shouldHide = true;
         if (pilotOnlyCharacterIds.size > 0) {
@@ -2884,10 +3009,9 @@ function applySecurityFilters() {
       }
     }
 
-    // Hide blobs: rows with any killmail having > maxAttackersValue attackers
     if (!shouldHide) {
-      const killmailRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
-      for (const km of killmailRows) {
+      const kmRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
+      for (const km of kmRows) {
         const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
         if (n > maxAttackersValue) {
           shouldHide = true;
@@ -2900,6 +3024,16 @@ function applySecurityFilters() {
       row.classList.add("filtered-out");
     }
   });
+
+  updateFilterIndicator({
+    lowsec: hiddenByLowsec,
+    nullsec: hiddenByNullsec,
+    pilot: hiddenByPilot,
+    tradeHub: hiddenByTradeHub,
+    gatecamps: hiddenByGatecamps,
+    maxAttackers: hiddenByMaxAttackers
+  });
+
   const showGatecampHints = hideGatecamps && pilotOnlyCharacterIds.size > 0 && gatecampHidSelectedPilotRows;
   updateGatecampFilterHintIconsVisibility(showGatecampHints, Array.from(hiddenSystemsForSelectedPilots));
   saveFilterState();
