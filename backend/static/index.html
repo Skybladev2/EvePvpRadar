@@ -2906,6 +2906,30 @@ function syncPilotMultiSystemHighlights() {
   }
 }
 
+// Clear all filters and show all data
+function clearAllFilters() {
+  document.querySelectorAll(".pilot-hide-systems-btn").forEach(function(btn) {
+    btn.classList.remove("active");
+    btn.setAttribute("aria-pressed", "false");
+    btn.setAttribute("title", "Show only systems where this pilot appears");
+    btn.setAttribute("aria-label", "Show only systems where this pilot appears as an attacker");
+  });
+  pilotOnlyCharacterIds.clear();
+  hiddenTradeHubs.clear();
+  syncTradeHubCheckboxes();
+  document.querySelectorAll(".trade-hub-filter-btn").forEach(function(btn) {
+    btn.classList.remove("active");
+    btn.setAttribute("aria-pressed", "false");
+  });
+  var filterLowsec = document.getElementById("filter-lowsec");
+  var filterNullsec = document.getElementById("filter-nullsec");
+  var filterGatecamps = document.getElementById("filter-gatecamps");
+  if (filterLowsec) filterLowsec.checked = true;
+  if (filterNullsec) filterNullsec.checked = true;
+  if (filterGatecamps) filterGatecamps.checked = false;
+  setMaxAttackersLimit(-1);
+}
+
 // Update the filter indicator icon at the top-left corner of the table
 function updateFilterIndicator(counts) {
   let indicator = document.getElementById("filter-indicator");
@@ -2914,6 +2938,7 @@ function updateFilterIndicator(counts) {
     if (!container) return;
     indicator = document.createElement("div");
     indicator.id = "filter-indicator";
+    indicator.addEventListener("click", clearAllFilters);
     const filterTemplate = document.getElementById("pilot-filter-icon-template");
     const filterSvg = filterTemplate ? (filterTemplate.innerHTML || "").trim() : "";
     const iconSpan = document.createElement("span");
