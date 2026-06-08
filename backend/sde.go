@@ -111,9 +111,45 @@ func downloadSDE() error {
 	return nil
 }
 
+type progressWriter struct {
+	wrapped io.Writer
+	total   int64
+	ticker  *time.Ticker
+	done    chan struct{}
+	last    int64
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n, err := pw.wrapped.Write(p)
+	pw.total += int64(n)
+	return n, err
+}
+
+func (pw *progressWriter) reportLoop() {
+	defer pw.ticker.Stop()
+	for {
+		select {
+		case <-pw.ticker.C:
+			written := pw.total
+			delta := written - pw.last
+			pw.last = written
+			log.Printf("SDE download progress: %d bytes (%.1f MB/s)", written, float64(delta)/1024/1024)
+		case <-pw.done:
+			return
+		}
+	}
+}
+
+func newProgressWriter(w io.Writer) *progressWriter {
+	return &progressWriter{
+		wrapped: w,
+		ticker:  time.NewTicker(1 * time.Second),
+		done:    make(chan struct{}),
+	}
+}
+
 func downloadSDEFile() error {
 	initSDEHTTPClient()
-	log.Println("Downloading SDE from", sdeURL)
 
 	out, err := os.Create(sdeZipFile)
 	if err != nil {
@@ -137,7 +173,19 @@ func downloadSDEFile() error {
 		return fmt.Errorf("failed to download SDE: HTTP %d", resp.StatusCode)
 	}
 
-	written, err := io.Copy(out, resp.Body)
+	contentLength := resp.ContentLength
+	if contentLength > 0 {
+		log.Printf("Downloading SDE from %s (%.1f MB)", sdeURL, float64(contentLength)/1024/1024)
+	} else {
+		log.Println("Downloading SDE from", sdeURL)
+	}
+
+	pw := newProgressWriter(out)
+	go pw.reportLoop()
+
+	written, err := io.Copy(pw, resp.Body)
+	close(pw.done)
+
 	if err != nil {
 		return fmt.Errorf("failed to save SDE: %v", err)
 	}

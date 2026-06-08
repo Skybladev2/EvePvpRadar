@@ -15,12 +15,10 @@ FROM debian:bookworm-slim@sha256:13cb01d584d2c23f475c088c168a48f9a08f033a1046057
 ARG DEBIAN_MIRROR=http://deb.debian.org/debian
 ARG DEBIAN_SECURITY_MIRROR=${DEBIAN_MIRROR}-security
 
-# Pin apt package versions so installs do not float on security uploads. When apt fails with
-# "but version X is to be installed", bump these strings to match `apt-cache policy <pkg>`.
 RUN sed -i "s|URIs: http://deb.debian.org/debian$|URIs: ${DEBIAN_MIRROR}|" /etc/apt/sources.list.d/debian.sources && \
     sed -i "s|URIs: http://deb.debian.org/debian-security$|URIs: ${DEBIAN_SECURITY_MIRROR}|" /etc/apt/sources.list.d/debian.sources && \
     apt-get update && apt-get install -y --no-install-recommends \
-    nginx=1.22.1-9+deb12u7 \
+    nginx=1.22.1-9+deb12u8 \
     libnginx-mod-http-lua=1:0.10.23-1+deb12u1 \
     libnginx-mod-http-headers-more-filter=1:0.34-3 \
     libnginx-mod-http-modsecurity=1.0.3-1+b2 \

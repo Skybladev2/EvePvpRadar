@@ -1072,6 +1072,63 @@
             width: 0.875rem;
             height: 0.875rem;
         }
+        .max-attackers-control {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.125rem;
+            margin-left: 0.25rem;
+        }
+        .max-attackers-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            margin: 0;
+            border: 1px solid #555;
+            background: #2a2a2a;
+            color: #e0e0e0;
+            cursor: pointer;
+            font-size: 0.7rem;
+            line-height: 1;
+            border-radius: 0.1875rem;
+            width: 1.375rem;
+            height: 1.375rem;
+            user-select: none;
+        }
+        .max-attackers-btn:hover {
+            background: #3a3a3a;
+            border-color: #888;
+        }
+        .max-attackers-btn:active {
+            background: #444;
+        }
+        .max-attackers-value {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 3.2em;
+            padding: 0.0625rem 0.375rem;
+            border: 1px solid #555;
+            border-radius: 0.1875rem;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            font-size: 0.8rem;
+            line-height: 1.6;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+        }
+        .max-attackers-reset {
+            margin-left: 0.125rem;
+            font-size: 0.75rem;
+            color: #888;
+            border-color: transparent;
+            background: transparent;
+        }
+        .max-attackers-reset:hover {
+            color: #e0e0e0;
+            border-color: #555;
+            background: #2a2a2a;
+        }
         @media (max-width: 770px) {
             #security-filters {
                 flex-direction: column;
@@ -1735,9 +1792,31 @@ function bindEventHandlers() {
   if (filterGatecamps) {
     filterGatecamps.addEventListener("change", applySecurityFilters);
   }
-  const filterMaxAttackers = document.getElementById("filter-max-attackers");
-  if (filterMaxAttackers) {
-    filterMaxAttackers.addEventListener("input", applySecurityFilters);
+  const maxAttackersInc = document.getElementById("max-attackers-inc");
+  const maxAttackersDec = document.getElementById("max-attackers-dec");
+  const maxAttackersReset = document.getElementById("max-attackers-reset");
+  if (maxAttackersInc) {
+    maxAttackersInc.addEventListener("click", function() {
+      if (maxAttackersLimit < 1) {
+        setMaxAttackersLimit(1);
+      } else {
+        setMaxAttackersLimit(Math.min(maxAttackersLimit + 1, 100));
+      }
+    });
+  }
+  if (maxAttackersDec) {
+    maxAttackersDec.addEventListener("click", function() {
+      if (maxAttackersLimit < 1) {
+        setMaxAttackersLimit(1);
+      } else {
+        setMaxAttackersLimit(Math.max(maxAttackersLimit - 1, 1));
+      }
+    });
+  }
+  if (maxAttackersReset) {
+    maxAttackersReset.addEventListener("click", function() {
+      setMaxAttackersLimit(-1);
+    });
   }
   debugLog("CLIENT: Event handlers bound");
 }
@@ -2544,17 +2623,19 @@ const pilotOnlyCharacterIds = new Set();
 /** When a trade hub name is in this set, its rows are hidden in the main table. */
 let hiddenTradeHubs = new Set();
 
+/** Max attackers limit. -1 means unbound (no filtering). 1-100 means hide rows with attacker count > this value. */
+let maxAttackersLimit = -1;
+
 const filterStateKey = 'evePvpSearchFilters';
 function saveFilterState() {
   const filterLowsec = document.getElementById("filter-lowsec");
   const filterNullsec = document.getElementById("filter-nullsec");
   const filterGatecamps = document.getElementById("filter-gatecamps");
-  const filterMaxAttackers = document.getElementById("filter-max-attackers");
   const state = {
     filterLowsec: filterLowsec ? filterLowsec.checked : true,
     filterNullsec: filterNullsec ? filterNullsec.checked : true,
     filterGatecamps: filterGatecamps ? filterGatecamps.checked : false,
-    maxAttackers: filterMaxAttackers ? parseInt(filterMaxAttackers.value, 10) : 5,
+    maxAttackers: maxAttackersLimit,
     hiddenTradeHubs: Array.from(hiddenTradeHubs)
   };
   try {
@@ -2570,11 +2651,10 @@ function restoreFilterState() {
     const filterLowsec = document.getElementById("filter-lowsec");
     const filterNullsec = document.getElementById("filter-nullsec");
     const filterGatecamps = document.getElementById("filter-gatecamps");
-    const filterMaxAttackers = document.getElementById("filter-max-attackers");
     if (filterLowsec && state.filterLowsec !== undefined) filterLowsec.checked = state.filterLowsec;
     if (filterNullsec && state.filterNullsec !== undefined) filterNullsec.checked = state.filterNullsec;
     if (filterGatecamps && state.filterGatecamps !== undefined) filterGatecamps.checked = state.filterGatecamps;
-    if (filterMaxAttackers && state.maxAttackers !== undefined) filterMaxAttackers.value = state.maxAttackers;
+    if (state.maxAttackers !== undefined) setMaxAttackersLimit(state.maxAttackers);
     if (Array.isArray(state.hiddenTradeHubs)) {
       hiddenTradeHubs = new Set(state.hiddenTradeHubs);
       syncTradeHubCheckboxes();
@@ -2861,6 +2941,16 @@ function updateFilterIndicator(counts) {
   }
 }
 
+// Update max attackers control display and re-apply filters
+function setMaxAttackersLimit(value) {
+  maxAttackersLimit = value;
+  const display = document.getElementById("max-attackers-display");
+  if (display) {
+    display.textContent = maxAttackersLimit < 1 ? "unbound" : maxAttackersLimit;
+  }
+  applySecurityFilters();
+}
+
 // Apply security filters based on checkbox states
 function applySecurityFilters() {
   const resultTable = document.getElementById("result");
@@ -2875,12 +2965,10 @@ function applySecurityFilters() {
   const filterLowsec = document.getElementById("filter-lowsec");
   const filterNullsec = document.getElementById("filter-nullsec");
   const filterGatecamps = document.getElementById("filter-gatecamps");
-  const filterMaxAttackers = document.getElementById("filter-max-attackers");
   
   const showLowsec = filterLowsec ? filterLowsec.checked : true;
   const showNullsec = filterNullsec ? filterNullsec.checked : true;
   const hideGatecamps = filterGatecamps ? filterGatecamps.checked : false;
-  const maxAttackersValue = filterMaxAttackers ? parseInt(filterMaxAttackers.value, 10) : 5;
 
   const hasHiddenHubs = mode === "near_trade_hubs" && hiddenTradeHubs.size > 0;
 
@@ -2944,12 +3032,14 @@ function applySecurityFilters() {
       if (distanceCell && distanceCell.querySelector(".route-warning-sign")) hiddenByGatecamps++;
     }
 
-    const killmailRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
-    for (const km of killmailRows) {
-      const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
-      if (n > maxAttackersValue) {
-        hiddenByMaxAttackers++;
-        break;
+    if (maxAttackersLimit > 0) {
+      const killmailRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
+      for (const km of killmailRows) {
+        const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
+        if (n > maxAttackersLimit) {
+          hiddenByMaxAttackers++;
+          break;
+        }
       }
     }
 
@@ -3009,11 +3099,11 @@ function applySecurityFilters() {
       }
     }
 
-    if (!shouldHide) {
+    if (!shouldHide && maxAttackersLimit > 0) {
       const kmRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
       for (const km of kmRows) {
         const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
-        if (n > maxAttackersValue) {
+        if (n > maxAttackersLimit) {
           shouldHide = true;
           break;
         }
@@ -3522,7 +3612,12 @@ function hideSetDestinationButtons() {
     <div id="security-filters">
         <label>
             <span>Max attackers:</span>
-            <input type="number" id="filter-max-attackers" min="1" max="100" value="5" style="width:60px;margin-left:4px">
+            <span class="max-attackers-control">
+                <button class="max-attackers-btn" id="max-attackers-dec" type="button" aria-label="Decrease max attackers">▼</button>
+                <span class="max-attackers-value" id="max-attackers-display">unbound</span>
+                <button class="max-attackers-btn" id="max-attackers-inc" type="button" aria-label="Increase max attackers">▲</button>
+                <button class="max-attackers-btn max-attackers-reset" id="max-attackers-reset" type="button" aria-label="Reset to unbound" title="Reset to unbound">✕</button>
+            </span>
         </label>
         <label>
             <input type="checkbox" id="filter-gatecamps">
