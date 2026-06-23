@@ -388,7 +388,6 @@
             overflow-y: auto;
             overflow-x: auto;
             margin: 0.625rem 0;
-            -webkit-overflow-scrolling: touch; /* Smooth scrolling on mobile */
             position: relative;
         }
         /* Mobile: ensure table is scrollable horizontally */
@@ -1201,7 +1200,7 @@
         #result tr.filtered-out {
             display: none;
         }
-        /* Filter indicator icon at top-left of table */
+        /* Filter indicator icon pinned at top-left of table */
         #filter-indicator {
             display: none;
             position: absolute;
@@ -2067,8 +2066,8 @@ async function handleModeChange() {
             tbody: resultTbody.innerHTML
           };
           applySecurityStatusClasses();
-          applySecurityFilters();
           initializeSorting();
+          applySecurityFilters();
           bindWaypointButtons();
           const isAuthenticated = applyAuthFromPage();
           if (isAuthenticated) showSetDestinationButtons();
@@ -2303,10 +2302,11 @@ async function fetchNearTradeHubs() {
     ensureShipTypeIconsUseWikiLinks(document.getElementById("thera-camps-container"));
     // Apply security status classes and filters
     applySecurityStatusClasses();
-    applySecurityFilters();
     
     // Initialize sorting
     initializeSorting();
+    
+    applySecurityFilters();
     
     // Bind waypoint buttons and update visibility based on auth status
     bindWaypointButtons();
@@ -2423,10 +2423,11 @@ async function fetchProximity() {
     ensureShipTypeIconsUseWikiLinks(document.getElementById("thera-camps-container"));
     // Apply security status classes and filters
     applySecurityStatusClasses();
-    applySecurityFilters();
     
     // Initialize sorting
     initializeSorting();
+    
+    applySecurityFilters();
     
     // Bind waypoint buttons and update visibility based on auth status
     bindWaypointButtons();
@@ -2938,7 +2939,6 @@ function updateFilterIndicator(counts) {
     if (!firstTh) return;
     indicator = document.createElement("div");
     indicator.id = "filter-indicator";
-    indicator.addEventListener("click", clearAllFilters);
     const filterTemplate = document.getElementById("pilot-filter-icon-template");
     const filterSvg = filterTemplate ? (filterTemplate.innerHTML || "").trim() : "";
     const iconSpan = document.createElement("span");
@@ -2947,7 +2947,7 @@ function updateFilterIndicator(counts) {
     const tooltip = document.createElement("div");
     tooltip.id = "filter-indicator-tooltip";
     indicator.appendChild(tooltip);
-    firstTh.appendChild(indicator);
+    firstTh.insertBefore(indicator, firstTh.firstChild);
   }
   const tooltip = document.getElementById("filter-indicator-tooltip");
   if (!tooltip) return;
@@ -2965,6 +2965,12 @@ function updateFilterIndicator(counts) {
     indicator.style.display = "none";
   }
 }
+
+document.addEventListener("click", function(e) {
+  if (e.target && e.target.closest && e.target.closest("#filter-indicator")) {
+    clearAllFilters();
+  }
+});
 
 // Update max attackers control display and re-apply filters
 function setMaxAttackersLimit(value) {
@@ -3192,7 +3198,8 @@ function initializeSorting() {
       newHeader.classList.add("sort-asc");
     }
     
-    newHeader.addEventListener("click", function() {
+    newHeader.addEventListener("click", function(e) {
+      if (e.target && e.target.closest && e.target.closest("#filter-indicator")) return;
       sortTable(index, newHeader);
     });
   });
