@@ -2934,8 +2934,8 @@ function clearAllFilters() {
 function updateFilterIndicator(counts) {
   let indicator = document.getElementById("filter-indicator");
   if (!indicator) {
-    const container = document.getElementById("result-container");
-    if (!container) return;
+    const firstTh = document.querySelector("#result thead th");
+    if (!firstTh) return;
     indicator = document.createElement("div");
     indicator.id = "filter-indicator";
     indicator.addEventListener("click", clearAllFilters);
@@ -2947,7 +2947,7 @@ function updateFilterIndicator(counts) {
     const tooltip = document.createElement("div");
     tooltip.id = "filter-indicator-tooltip";
     indicator.appendChild(tooltip);
-    container.appendChild(indicator);
+    firstTh.appendChild(indicator);
   }
   const tooltip = document.getElementById("filter-indicator-tooltip");
   if (!tooltip) return;
