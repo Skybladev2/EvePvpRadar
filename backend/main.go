@@ -3033,7 +3033,7 @@ func precalculateNearTradeHubsModeForSystem(targetSystemID int) {
 
 		// Use shared route cache (same as proximity mode)
 		viaThera, distance, theraInfo, _, _, maxShipSize, route := getProximityRoute(hub.SystemID, targetSystemID)
-		log.Printf("DEBUG precalculateNearTradeHubs: hub=%s(%d) → target=%s(%d): distance=%d", hub.Name, hub.SystemID, targetSystem.SystemName, targetSystemID, distance)
+		logging.Debugf("precalculateNearTradeHubs: hub=%s(%d) → target=%s(%d): distance=%d", hub.Name, hub.SystemID, targetSystem.SystemName, targetSystemID, distance)
 		if distance < 0 {
 			continue
 		}
