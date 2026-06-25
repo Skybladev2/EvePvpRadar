@@ -46,7 +46,6 @@ func initSDEHTTPClient() {
 
 		transport := &http.Transport{
 			DialContext:           dialContext,
-			ForceAttemptHTTP2:     false,
 			ResponseHeaderTimeout: 120 * time.Second,
 			TLSHandshakeTimeout:   30 * time.Second,
 		}
@@ -364,11 +363,11 @@ func getSystemsFromSDE() ([]System, error) {
 
 // ItemType represents an EVE Online item type from the SDE
 type ItemType struct {
-	Key       int               `json:"_key"`
-	GroupID   int               `json:"groupID"`
-	Name      map[string]string `json:"name"`
+	Key         int               `json:"_key"`
+	GroupID     int               `json:"groupID"`
+	Name        map[string]string `json:"name"`
 	Description map[string]string `json:"description"`
-	Published bool              `json:"published"`
+	Published   bool              `json:"published"`
 }
 
 // getGroupsFromSDE reads groups data from the SDE
