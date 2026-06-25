@@ -1791,7 +1791,7 @@ func convertSystemsToRoutefinder(mainSystems []System) []routefinder.System {
 }
 
 func setUserAgent(req *http.Request) {
-	setUserAgent(req)
+	req.Header.Set("User-Agent", httpUserAgent)
 	req.Header.Set("X-User-Agent", httpUserAgent)
 }
 
@@ -1804,20 +1804,15 @@ func startup(mw io.Writer) {
 	}
 
 	// User-Agent for outgoing HTTP (ESI, etc.): format "APP_NAME/COMMIT (CONTACT_INFO)"
-	base := strings.TrimSpace(os.Getenv("USER_AGENT"))
-	if base == "" {
-		log.Fatal("USER_AGENT is required")
+	appName := strings.TrimSpace(os.Getenv("USER_AGENT_APP_NAME"))
+	if appName == "" {
+		log.Fatal("USER_AGENT_APP_NAME is required")
 	}
 	commitVal := commit
 	if commitVal == "" {
 		commitVal = strings.TrimSpace(os.Getenv("COMMIT"))
 	}
-	parts := strings.SplitN(base, ";", 2)
-	appName := strings.TrimSpace(parts[0])
-	contactInfo := ""
-	if len(parts) > 1 {
-		contactInfo = strings.TrimSpace(parts[1])
-	}
+	contactInfo := strings.TrimSpace(os.Getenv("USER_AGENT_CONTACT_INFO"))
 	httpUserAgent = appName
 	if commitVal != "" {
 		httpUserAgent += "/" + commitVal
