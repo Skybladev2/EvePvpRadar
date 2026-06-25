@@ -165,6 +165,8 @@ type RouteFinder struct {
 	httpClient *http.Client
 	// Base URL for Thera API (for testing) - rarely changed, no protection needed
 	theraAPIBaseURL string
+	// User-Agent sent with HTTP requests
+	userAgent string
 }
 
 // Route represents a path between two systems
@@ -244,8 +246,12 @@ func NewRouteFinder(systems []System) *RouteFinder {
 
 // SetTheraAPIBaseURL sets the base URL for Thera API (for testing)
 func (rf *RouteFinder) SetTheraAPIBaseURL(baseURL string) {
-	// No mutex needed - rarely changed and not part of graph data
 	rf.theraAPIBaseURL = baseURL
+}
+
+// SetUserAgent sets the User-Agent header sent with HTTP requests
+func (rf *RouteFinder) SetUserAgent(ua string) {
+	rf.userAgent = ua
 }
 
 // SetHTTPClient sets the HTTP client (for testing)
@@ -625,7 +631,16 @@ func (rf *RouteFinder) fetchTheraSignatures() {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
 
-	resp, err := client.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("Error creating request for Thera signatures: %v", err)
+		return
+	}
+	if rf.userAgent != "" {
+		req.Header.Set("User-Agent", rf.userAgent)
+		req.Header.Set("X-User-Agent", rf.userAgent)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("Error fetching Thera signatures: %v", err)
 		return

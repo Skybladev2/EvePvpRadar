@@ -58,6 +58,7 @@ func (c *Cache) getR2Z2Sequence(client *http.Client) (int64, error) {
 	}
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
+		req.Header.Set("X-User-Agent", c.userAgent)
 	}
 
 	start := time.Now()
@@ -116,6 +117,7 @@ func (c *Cache) fetchR2Z2Killmail(client *http.Client, sequence int64, source st
 	}
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
+		req.Header.Set("X-User-Agent", c.userAgent)
 	}
 
 	start := time.Now()

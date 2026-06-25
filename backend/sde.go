@@ -161,7 +161,7 @@ func downloadSDEFile() error {
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}
-	req.Header.Set("User-Agent", httpUserAgent)
+	setUserAgent(req)
 
 	resp, err := sdeHTTPClient.Do(req)
 	if err != nil {

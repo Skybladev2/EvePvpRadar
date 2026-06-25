@@ -222,7 +222,7 @@ func probeUedamaScoutLive() bool {
 		logging.Debugf("Could not build Twitch live request: %v", err)
 		return false
 	}
-	req.Header.Set("User-Agent", "EvePvPRadar/1.0")
+	setUserAgent(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1266,6 +1266,7 @@ func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 				results <- result{id: id, name: "", ok: false, errMsg: esiCharacterNameFailureMsg(id, "failed to create request")}
 				return
 			}
+			setUserAgent(req)
 			resp, err := client.Do(req)
 			if err != nil || resp == nil {
 				if resp != nil {
@@ -1418,7 +1419,13 @@ func getTheraStationPositions() [][3]float64 {
 		theraStationPositionsMu.RUnlock()
 
 		url := fmt.Sprintf("https://esi.evetech.net/latest/universe/stations/%d/?datasource=tranquility", sid)
-		resp, err := client.Get(url)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			log.Printf("ESI request: GET /universe/stations/%d/ (Thera position) failed: %v", sid, err)
+			continue
+		}
+		setUserAgent(req)
+		resp, err := client.Do(req)
 		if err != nil || resp == nil {
 			if resp != nil {
 				log.Printf("ESI request: GET /universe/stations/%d/ (Thera position) -> HTTP %d", sid, resp.StatusCode)
@@ -1509,10 +1516,18 @@ func getStationIDByName(systemID int, stationName string) int {
 	if !cached {
 		// Fetch system info which includes station IDs
 		url := fmt.Sprintf("https://esi.evetech.net/latest/universe/systems/%d/?datasource=tranquility", systemID)
-		resp, err := client.Get(url)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			logging.Debugf("Failed to create request for system %d: %v", systemID, err)
+			stationNameCacheMu.Lock()
+			stationNameCache[cacheKey] = 0
+			stationNameCacheMu.Unlock()
+			return 0
+		}
+		setUserAgent(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			logging.Debugf("Failed to fetch stations for system %d: %v", systemID, err)
-			// Cache 0 to avoid repeated failed requests
 			stationNameCacheMu.Lock()
 			stationNameCache[cacheKey] = 0
 			stationNameCacheMu.Unlock()
@@ -1523,20 +1538,17 @@ func getStationIDByName(systemID int, stationName string) int {
 
 		if resp.StatusCode != http.StatusOK {
 			logging.Debugf("Failed to fetch stations for system %d: HTTP %d", systemID, resp.StatusCode)
-			// Cache 0 to avoid repeated failed requests
 			stationNameCacheMu.Lock()
 			stationNameCache[cacheKey] = 0
 			stationNameCacheMu.Unlock()
 			return 0
 		}
 
-		// Only decode Stations array - SystemID comes from SDE (we already know it's systemID)
 		var systemInfo struct {
 			Stations []int `json:"stations"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&systemInfo); err != nil {
 			logging.Debugf("Failed to decode stations for system %d: %v", systemID, err)
-			// Cache 0 to avoid repeated failed requests
 			stationNameCacheMu.Lock()
 			stationNameCache[cacheKey] = 0
 			stationNameCacheMu.Unlock()
@@ -1544,7 +1556,6 @@ func getStationIDByName(systemID int, stationName string) int {
 		}
 		stationIDs = systemInfo.Stations
 
-		// Cache the station IDs
 		systemInfoCacheMu.Lock()
 		systemInfoCache[systemID] = stationIDs
 		systemInfoCacheMu.Unlock()
@@ -1570,7 +1581,13 @@ func getStationIDByName(systemID int, stationName string) int {
 			lastAPIRequest = time.Now()
 
 			stationURL := fmt.Sprintf("https://esi.evetech.net/latest/universe/stations/%d/?datasource=tranquility", sid)
-			stationResp, err := client.Get(stationURL)
+			sReq, err := http.NewRequest("GET", stationURL, nil)
+			if err != nil {
+				log.Printf("ESI request: GET /universe/stations/%d/ (station name) -> ERROR: %v", sid, err)
+				continue
+			}
+			sReq.Header.Set("User-Agent", httpUserAgent)
+			stationResp, err := client.Do(sReq)
 			if err != nil {
 				log.Printf("ESI request: GET /universe/stations/%d/ (station name) -> ERROR: %v", sid, err)
 				continue
@@ -1648,9 +1665,20 @@ func verifyStationID(stationID int) (int, string, error) {
 
 	// Fetch station details from ESI
 	url := fmt.Sprintf("https://esi.evetech.net/latest/universe/stations/%d/?datasource=tranquility", stationID)
-	resp, err := client.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		// Cache failure
+		stationVerificationCacheMu.Lock()
+		stationVerificationCache[stationID] = struct {
+			SystemID    int
+			StationName string
+			Verified    bool
+		}{Verified: false}
+		stationVerificationCacheMu.Unlock()
+		return 0, "", fmt.Errorf("failed to create request for station: %v", err)
+	}
+	setUserAgent(req)
+	resp, err := client.Do(req)
+	if err != nil {
 		stationVerificationCacheMu.Lock()
 		stationVerificationCache[stationID] = struct {
 			SystemID    int
@@ -1762,6 +1790,11 @@ func convertSystemsToRoutefinder(mainSystems []System) []routefinder.System {
 	return result
 }
 
+func setUserAgent(req *http.Request) {
+	setUserAgent(req)
+	req.Header.Set("X-User-Agent", httpUserAgent)
+}
+
 func startup(mw io.Writer) {
 	// Check for development mode
 	mockData = os.Getenv("MOCK_DATA") == "1" || os.Getenv("MOCK_DATA") == "true"
@@ -1770,7 +1803,7 @@ func startup(mw io.Writer) {
 		fmt.Fprintln(mw, "Using mocked data for testing UI")
 	}
 
-	// User-Agent for outgoing HTTP (ESI, etc.): base string from USER_AGENT env + commit when set
+	// User-Agent for outgoing HTTP (ESI, etc.): format "APP_NAME/COMMIT (CONTACT_INFO)"
 	base := strings.TrimSpace(os.Getenv("USER_AGENT"))
 	if base == "" {
 		log.Fatal("USER_AGENT is required")
@@ -1779,9 +1812,18 @@ func startup(mw io.Writer) {
 	if commitVal == "" {
 		commitVal = strings.TrimSpace(os.Getenv("COMMIT"))
 	}
-	httpUserAgent = base
+	parts := strings.SplitN(base, ";", 2)
+	appName := strings.TrimSpace(parts[0])
+	contactInfo := ""
+	if len(parts) > 1 {
+		contactInfo = strings.TrimSpace(parts[1])
+	}
+	httpUserAgent = appName
 	if commitVal != "" {
-		httpUserAgent += "+" + commitVal
+		httpUserAgent += "/" + commitVal
+	}
+	if contactInfo != "" {
+		httpUserAgent += " (" + contactInfo + ")"
 	}
 	fmt.Fprintln(mw, "User-Agent:", httpUserAgent)
 
@@ -1821,6 +1863,7 @@ func startup(mw io.Writer) {
 	// Initialize route finder after systems are loaded
 	routefinderSystems := convertSystemsToRoutefinder(systems)
 	globalRouteFinder = routefinder.NewRouteFinder(routefinderSystems)
+	globalRouteFinder.SetUserAgent(httpUserAgent)
 
 	// Load trade hubs
 	loadTradeHubs(mw)
@@ -5709,10 +5752,10 @@ func refreshAccessToken(session *SSOSession) error {
 		return fmt.Errorf("failed to create token request: %v", err)
 	}
 
-	// Set basic auth header
 	auth := base64.StdEncoding.EncodeToString([]byte(ssoClientID + ":" + ssoClientSecret))
 	req.Header.Set("Authorization", "Basic "+auth)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setUserAgent(req)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req) // #nosec G704 -- req uses constant ssoTokenURL
@@ -5906,10 +5949,10 @@ func ssoCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set basic auth header
 	auth := base64.StdEncoding.EncodeToString([]byte(ssoClientID + ":" + ssoClientSecret))
 	req.Header.Set("Authorization", "Basic "+auth)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setUserAgent(req)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req) // #nosec G704 -- req uses constant ssoTokenURL
@@ -6132,7 +6175,7 @@ func ssoLocationHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
-	req.Header.Set("User-Agent", httpUserAgent)
+	setUserAgent(req)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req) // #nosec G704 -- req uses esiURL (host esi.evetech.net)
@@ -6196,7 +6239,7 @@ func proximityHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
-	req.Header.Set("User-Agent", httpUserAgent)
+	setUserAgent(req)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req) // #nosec G704 -- req uses esiURL
@@ -6352,7 +6395,7 @@ func checkCharacterOnline(session *SSOSession) (bool, error) {
 	}
 
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
-	req.Header.Set("User-Agent", httpUserAgent)
+	setUserAgent(req)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req) // #nosec G704 -- esiURL host fixed to esi.evetech.net
@@ -6481,7 +6524,7 @@ func ssoWaypointHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
-	req.Header.Set("User-Agent", httpUserAgent)
+	setUserAgent(req)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req) // #nosec G704 -- esiURL host fixed to esi.evetech.net
