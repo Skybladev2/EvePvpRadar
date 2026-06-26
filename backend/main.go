@@ -1274,7 +1274,7 @@ func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 		go func() {
 			characterResolveSem <- struct{}{}
 			defer func() { <-characterResolveSem }()
-			esiURL := fmt.Sprintf("https://esi.evetech.net/latest/characters/%d/?datasource=tranquility", id)
+			esiURL := fmt.Sprintf("https://esi.evetech.net/characters/%d/?datasource=tranquility", id)
 			req, err := http.NewRequest("GET", esiURL, nil)
 			if err != nil {
 				results <- result{id: id, name: "", ok: false, errMsg: esiCharacterNameFailureMsg(id, "failed to create request")}
@@ -1546,6 +1546,8 @@ func getESIClient() *http.Client {
 	return esiClient
 }
 
+var esiCompatibilityDate = time.Now().In(time.FixedZone("EVE", -11*60*60)).Format("2006-01-02") // ponytail: recompute at process start only; ESI date rolls at 11:00 UTC
+
 const (
 	esiMaxRetries              = 3
 	esiRetryBaseDelay          = 1 * time.Second
@@ -1585,6 +1587,8 @@ func esiDo(req *http.Request) (*http.Response, error) {
 	if skip {
 		return nil, errors.New("esi rate limit remaining critically low, skipping request")
 	}
+
+	req.Header.Set("X-Compatibility-Date", esiCompatibilityDate)
 
 	for attempt := 0; attempt <= esiMaxRetries; attempt++ {
 		if attempt > 0 {
@@ -4974,10 +4978,6 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 		if !hasRedundantRouteSuffix {
 			if routeContainsThera && routeContainsZarzakh {
 			theraSuffix := " (Thera"
-			// Add EOL indicator if Thera route is End-of-Life
-			if strings.Contains(system.TheraInfo, "EOL") || (mockData && system.SystemID == 30002440) {
-				theraSuffix += ", EOL"
-			}
 			if system.MaxShipSize != "" {
 				theraSuffix += ", max " + template.HTMLEscapeString(system.MaxShipSize)
 				logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (Thera+Zarzakh)", system.MaxShipSize, system.Name)
@@ -4988,10 +4988,6 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 			html.WriteString(theraSuffix)
 		} else if routeContainsThera {
 			theraSuffix := " (Thera"
-			// Add EOL indicator if Thera route is End-of-Life
-			if strings.Contains(system.TheraInfo, "EOL") || (mockData && system.SystemID == 30002440) {
-				theraSuffix += ", EOL"
-			}
 			if system.MaxShipSize != "" {
 				theraSuffix += ", max " + template.HTMLEscapeString(system.MaxShipSize)
 				logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (Thera only)", system.MaxShipSize, system.Name)
@@ -5002,6 +4998,19 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 			html.WriteString(theraSuffix)
 		} else if routeContainsZarzakh {
 				html.WriteString(" (Zarzakh)")
+			}
+		}
+		// Show EOL and max ship size for Thera routes even when trade hub suppresses the redundant suffix
+		if hasRedundantRouteSuffix && routeContainsThera {
+			var theraParts []string
+			if theraEOL {
+				theraParts = append(theraParts, "EOL")
+			}
+			if system.MaxShipSize != "" {
+				theraParts = append(theraParts, "max "+template.HTMLEscapeString(system.MaxShipSize))
+			}
+			if len(theraParts) > 0 {
+				html.WriteString(" (" + strings.Join(theraParts, ", ") + ")")
 			}
 		}
 		html.WriteString("</span>")
@@ -6142,7 +6151,7 @@ func ssoLocationHandler(w http.ResponseWriter, r *http.Request) {
 	// getSession already handles token refresh automatically
 
 	// Fetch location from ESI
-	esiURL := fmt.Sprintf("https://esi.evetech.net/latest/characters/%d/location/?datasource=tranquility", session.CharacterID)
+	esiURL := fmt.Sprintf("https://esi.evetech.net/characters/%d/location/?datasource=tranquility", session.CharacterID)
 	req, err := http.NewRequest("GET", esiURL, nil) // #nosec G704 -- host fixed to esi.evetech.net
 	if err != nil {
 		http.Error(w, "Failed to create ESI request", http.StatusInternalServerError)
@@ -6206,7 +6215,7 @@ func proximityHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch character location from ESI
-	esiURL := fmt.Sprintf("https://esi.evetech.net/latest/characters/%d/location/?datasource=tranquility", session.CharacterID)
+	esiURL := fmt.Sprintf("https://esi.evetech.net/characters/%d/location/?datasource=tranquility", session.CharacterID)
 	req, err := http.NewRequest("GET", esiURL, nil) // #nosec G704 -- host fixed to esi.evetech.net
 	if err != nil {
 		http.Error(w, "Failed to create ESI request", http.StatusInternalServerError)
@@ -6361,7 +6370,7 @@ func proximityHandler(w http.ResponseWriter, r *http.Request) {
 
 // checkCharacterOnline verifies if the authenticated character is currently online in EVE.
 func checkCharacterOnline(session *SSOSession) (bool, error) {
-	esiURL := fmt.Sprintf("https://esi.evetech.net/latest/characters/%d/online/?datasource=tranquility", session.CharacterID)
+	esiURL := fmt.Sprintf("https://esi.evetech.net/characters/%d/online/?datasource=tranquility", session.CharacterID)
 	req, err := http.NewRequest("GET", esiURL, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to create online status request: %w", err)
@@ -6482,7 +6491,7 @@ func ssoWaypointHandler(w http.ResponseWriter, r *http.Request) {
 	// The character must be online for the request to succeed (already verified above).
 	clearOtherWaypoints := requestData.IsFirst == nil || *requestData.IsFirst
 	addToBeginning := false // Always add to end to maintain route order
-	esiURL := fmt.Sprintf("https://esi.evetech.net/latest/ui/autopilot/waypoint/?destination_id=%d&add_to_beginning=%v&clear_other_waypoints=%v&datasource=tranquility",
+	esiURL := fmt.Sprintf("https://esi.evetech.net/ui/autopilot/waypoint/?destination_id=%d&add_to_beginning=%v&clear_other_waypoints=%v&datasource=tranquility",
 		destinationID, addToBeginning, clearOtherWaypoints)
 	if requestData.StationID > 0 && destinationID == requestData.SystemID {
 		log.Printf("INFO: Station ID %d was provided but not used (fallback to system ID %d)", requestData.StationID, requestData.SystemID)
