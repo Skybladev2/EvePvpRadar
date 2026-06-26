@@ -367,6 +367,18 @@ var (
 		Name: "evepvpsearch_esi_error_limit_remain",
 		Help: "Current ESI error limit remaining (X-ESI-Error-Limit-Remain)",
 	})
+	esiRatelimitRemainGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "evepvpsearch_esi_ratelimit_remain",
+		Help: "Current ESI rate limit tokens remaining by group (X-Ratelimit-Remaining)",
+	}, []string{"group"})
+	esiRatelimitUsedGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "evepvpsearch_esi_ratelimit_used",
+		Help: "Tokens consumed by last request by group (X-Ratelimit-Used)",
+	}, []string{"group"})
+	esiRatelimitLimitGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "evepvpsearch_esi_ratelimit_limit",
+		Help: "Total tokens per window by group (X-Ratelimit-Limit)",
+	}, []string{"group"})
 	esiRequestDuration = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "evepvpsearch_esi_request_duration_seconds",
 		Help:    "ESI request duration in seconds",
@@ -1490,10 +1502,18 @@ func getESIClient() *http.Client {
 }
 
 const (
-	esiMaxRetries        = 3
-	esiRetryBaseDelay    = 1 * time.Second
-	esiRetryMaxDelay     = 10 * time.Second
-	esiErrorWarnThreshold = 20
+	esiMaxRetries              = 3
+	esiRetryBaseDelay          = 1 * time.Second
+	esiRetryMaxDelay           = 10 * time.Second
+	esiErrorWarnThreshold      = 20
+	esiRatelimitSkipThreshold = 20 // skip request when X-Ratelimit-Remaining drops below this; caller can tolerate absence
+)
+
+// per-group ESI rate limit state, keyed by X-Ratelimit-Group value.
+var (
+	ratelimitGroupMu     sync.Mutex
+	ratelimitGroupRemain = map[string]int{}
+	ratelimitGroupLimit  = map[string]int{}
 )
 
 func esiDo(req *http.Request) (*http.Response, error) {
@@ -1505,6 +1525,21 @@ func esiDo(req *http.Request) (*http.Response, error) {
 		esiRequestDuration.Observe(time.Since(start).Seconds())
 		esiRequestsTotal.Inc()
 	}()
+
+	// Skip request if any rate limit group is critically low — caller can tolerate the absence
+	// (e.g. a missing pilot name) and we must not delay showing data to the user.
+	ratelimitGroupMu.Lock()
+	var skip bool
+	for _, remain := range ratelimitGroupRemain {
+		if remain < esiRatelimitSkipThreshold {
+			skip = true
+			break
+		}
+	}
+	ratelimitGroupMu.Unlock()
+	if skip {
+		return nil, errors.New("esi rate limit remaining critically low, skipping request")
+	}
 
 	for attempt := 0; attempt <= esiMaxRetries; attempt++ {
 		if attempt > 0 {
@@ -1523,11 +1558,49 @@ func esiDo(req *http.Request) (*http.Response, error) {
 			return nil, fmt.Errorf("esi request failed: %w", err)
 		}
 
+		// Track old error limit headers (routes without new rate limiting).
 		if remain := resp.Header.Get("X-ESI-Error-Limit-Remain"); remain != "" {
 			if v, err := strconv.Atoi(remain); err == nil {
 				esiErrorLimitRemainGauge.Set(float64(v))
 				if v < esiErrorWarnThreshold {
 					log.Printf("ESI error limit remain: %d (low!)", v)
+				}
+			}
+		}
+
+		// Track new rate limit headers (routes with new rate limiting).
+		if rlRemain := resp.Header.Get("X-Ratelimit-Remaining"); rlRemain != "" {
+			if v, err := strconv.Atoi(rlRemain); err == nil {
+				if rlGroup := resp.Header.Get("X-Ratelimit-Group"); rlGroup != "" {
+					esiRatelimitRemainGauge.WithLabelValues(rlGroup).Set(float64(v))
+					ratelimitGroupMu.Lock()
+					ratelimitGroupRemain[rlGroup] = v
+					ratelimitGroupMu.Unlock()
+				if v < esiRatelimitSkipThreshold {
+					log.Printf("ESI ratelimit group %s remaining: %d (low!)", rlGroup, v)
+					}
+				}
+			}
+		}
+		if rlUsed := resp.Header.Get("X-Ratelimit-Used"); rlUsed != "" {
+			if v, err := strconv.Atoi(rlUsed); err == nil {
+				if rlGroup := resp.Header.Get("X-Ratelimit-Group"); rlGroup != "" {
+					esiRatelimitUsedGauge.WithLabelValues(rlGroup).Set(float64(v))
+				}
+			}
+		}
+		if rlLimit := resp.Header.Get("X-Ratelimit-Limit"); rlLimit != "" {
+			if rlGroup := resp.Header.Get("X-Ratelimit-Group"); rlGroup != "" {
+				// Limit header format: "150/15m" – extract the numeric part.
+				limStr := rlLimit
+				if idx := strings.IndexByte(rlLimit, '/'); idx >= 0 {
+					limStr = rlLimit[:idx]
+				}
+				if v, err := strconv.Atoi(limStr); err == nil {
+					esiRatelimitLimitGauge.WithLabelValues(rlGroup).Set(float64(v))
+					ratelimitGroupMu.Lock()
+					ratelimitGroupLimit[rlGroup] = v
+					ratelimitGroupMu.Unlock()
 				}
 			}
 		}
