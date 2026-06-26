@@ -351,6 +351,27 @@ var (
 		Name: "evepvpsearch_proximity_route_cache_invalidations_total",
 		Help: "Total number of full proximity route cache invalidations caused by Thera signature fingerprint changes",
 	})
+	esiRequestsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "evepvpsearch_esi_requests_total",
+		Help: "Total ESI requests made",
+	})
+	esiErrorsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "evepvpsearch_esi_errors_total",
+		Help: "Total ESI error responses (non-2xx)",
+	})
+	esiRetriesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "evepvpsearch_esi_retries_total",
+		Help: "Total ESI request retries (420/429)",
+	})
+	esiErrorLimitRemainGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "evepvpsearch_esi_error_limit_remain",
+		Help: "Current ESI error limit remaining (X-ESI-Error-Limit-Remain)",
+	})
+	esiRequestDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "evepvpsearch_esi_request_duration_seconds",
+		Help:    "ESI request duration in seconds",
+		Buckets: prometheus.DefBuckets,
+	})
 )
 
 func siteRootVisitorKey(ip, userAgent string) string {
@@ -486,7 +507,6 @@ var types map[int]string
 var typeIDToGroupName map[int]string
 var typeIDToGroupID map[int]int // typeID -> groupID, for weapon/ship group checks
 var logFile io.Writer
-var lastAPIRequest time.Time
 var globalRouteFinder *routefinder.RouteFinder
 var killmailCache *zkillboardcache.Cache
 var mockData bool // Use mock data when MOCK_DATA=1 or true
@@ -522,9 +542,11 @@ var (
 	donateText string
 	// httpUserAgent is set at startup: USER_AGENT (base string) + commit when set
 	httpUserAgent string
-	// Station ID cache: systemID -> stationID (0 means no station found or not yet fetched)
-	systemStationCache   = make(map[int]int) // systemID -> stationID
-	systemStationCacheMu sync.RWMutex
+	// SDE station data: loaded once at startup from staStations.jsonl
+	stationsByID   map[int]StationSDE     // stationID -> station
+	stationsByIDMu sync.RWMutex
+	systemStations map[int][]int         // systemID -> []stationID (first is primary)
+	systemStationsMu sync.RWMutex
 )
 
 const (
@@ -1155,33 +1177,8 @@ func getKillPositionAndDistance(systemID int, locationID int, killmail *ESIKillm
 	return killPosition, distance, isWithinRange, stargateInfo, nil
 }
 
-// Station name to ID cache: "systemID:stationName" -> stationID
-var stationNameCache = make(map[string]int) // "systemID:stationName" -> stationID
-var stationNameCacheMu sync.RWMutex
-
-// Station ID verification cache: stationID -> {systemID, stationName, verified}
-var stationVerificationCache = make(map[int]struct {
-	SystemID    int
-	StationName string
-	Verified    bool
-})
-var stationVerificationCacheMu sync.RWMutex
-
-// Caches for station lookup to avoid repeated ESI requests
-var systemInfoCache = make(map[int][]int) // systemID -> stationIDs
-var systemInfoCacheMu sync.RWMutex
-
-var stationDetailCache = make(map[int]struct {
-	Name     string
-	SystemID int
-}) // stationID -> {name, systemID}
-var stationDetailCacheMu sync.RWMutex
-
-// Thera station positions cache (meters); 10000 km = 10e6 m
+// Thera station positions (meters); 10000 km = 10e6 m
 const theraCampMinDistanceFromStation = 10_000_000.0
-
-var theraStationPositionsCache = make(map[int][3]float64)
-var theraStationPositionsMu sync.RWMutex
 
 // characterNameCache caches character ID -> name from ESI (GET /characters/{id}/).
 // ESI rate limiting: https://developers.eveonline.com/docs/services/esi/rate-limiting/
@@ -1200,11 +1197,8 @@ var (
 )
 
 // esiCharacterNameFailureMsg builds a user-facing tooltip when ESI did not return a pilot name.
-func esiCharacterNameFailureMsg(characterID int, detail string) string {
-	if detail == "" {
-		return fmt.Sprintf("Could not load pilot name from ESI (character ID %d)", characterID)
-	}
-	return fmt.Sprintf("Could not load pilot name from ESI (character ID %d): %s", characterID, detail)
+func esiCharacterNameFailureMsg(characterID int, _ string) string {
+	return fmt.Sprintf("Could not load pilot name from ESI (character ID %d)", characterID)
 }
 
 // resolveCharacterNames returns character ID -> name for the given IDs (player attackers only; 0 is skipped).
@@ -1250,7 +1244,6 @@ func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 		errMsg string
 	}
 	results := make(chan result, len(need))
-	client := &http.Client{Timeout: 15 * time.Second}
 	for i, id := range need {
 		id := id
 		// Stagger request start to spread over time (ESI best practice: "Spread requests over time rather than bursting")
@@ -1267,19 +1260,10 @@ func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 				return
 			}
 			setUserAgent(req)
-			resp, err := client.Do(req)
-			if err != nil || resp == nil {
-				if resp != nil {
-					log.Printf("ESI request: GET /characters/%d/ (character name) -> HTTP %d", id, resp.StatusCode)
-					_ = resp.Body.Close()
-				} else {
-					log.Printf("ESI request: GET /characters/%d/ (character name) failed: %v", id, err)
-				}
-				detail := "request failed"
-				if err != nil {
-					detail = err.Error()
-				}
-				results <- result{id: id, name: "", ok: false, errMsg: esiCharacterNameFailureMsg(id, detail)}
+			resp, err := esiDo(req)
+			if err != nil {
+				log.Printf("ESI request: GET /characters/%d/ (character name) failed: %v", id, err)
+				results <- result{id: id, name: "", ok: false, errMsg: esiCharacterNameFailureMsg(id, err.Error())}
 				return
 			}
 			defer resp.Body.Close()
@@ -1386,85 +1370,24 @@ func writePilotLinkAttrs(html *strings.Builder, meta pilotLinkMeta, characterID 
 	html.WriteString(template.HTMLEscapeString(meta.tooltip))
 }
 
-// getTheraStationPositions returns positions of Thera stations (meters), fetched from ESI and cached
+// getTheraStationPositions returns positions of Thera stations (meters), from SDE data.
 func getTheraStationPositions() [][3]float64 {
 	stationIDs := []int{TheraStationID1, TheraStationID2, TheraStationID3, TheraStationID4}
-	var positions [][3]float64
-	theraStationPositionsMu.RLock()
-	allCached := true
+	positions := make([][3]float64, 0, 4)
+	stationsByIDMu.RLock()
 	for _, sid := range stationIDs {
-		if _, ok := theraStationPositionsCache[sid]; !ok {
-			allCached = false
-			break
+		if s, ok := stationsByID[sid]; ok {
+			positions = append(positions, s.Position)
+		} else {
+			positions = append(positions, [3]float64{0, 0, 0})
 		}
 	}
-	if allCached {
-		for _, sid := range stationIDs {
-			positions = append(positions, theraStationPositionsCache[sid])
-		}
-		theraStationPositionsMu.RUnlock()
-		return positions
-	}
-	theraStationPositionsMu.RUnlock()
-
-	// Fetch missing positions from ESI
-	client := &http.Client{Timeout: 10 * time.Second}
-	for _, sid := range stationIDs {
-		theraStationPositionsMu.RLock()
-		if pos, ok := theraStationPositionsCache[sid]; ok {
-			positions = append(positions, pos)
-			theraStationPositionsMu.RUnlock()
-			continue
-		}
-		theraStationPositionsMu.RUnlock()
-
-		url := fmt.Sprintf("https://esi.evetech.net/latest/universe/stations/%d/?datasource=tranquility", sid)
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			log.Printf("ESI request: GET /universe/stations/%d/ (Thera position) failed: %v", sid, err)
-			continue
-		}
-		setUserAgent(req)
-		resp, err := client.Do(req)
-		if err != nil || resp == nil {
-			if resp != nil {
-				log.Printf("ESI request: GET /universe/stations/%d/ (Thera position) -> HTTP %d", sid, resp.StatusCode)
-				_ = resp.Body.Close()
-			} else {
-				log.Printf("ESI request: GET /universe/stations/%d/ (Thera position) failed: %v", sid, err)
-			}
-			continue
-		}
-		log.Printf("ESI request: GET /universe/stations/%d/ (Thera position) -> HTTP %d", sid, resp.StatusCode)
-		if resp.StatusCode != http.StatusOK {
-			_ = resp.Body.Close()
-			continue
-		}
-		var st struct {
-			Position struct {
-				X float64 `json:"x"`
-				Y float64 `json:"y"`
-				Z float64 `json:"z"`
-			} `json:"position"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
-			_ = resp.Body.Close()
-			continue
-		}
-		_ = resp.Body.Close()
-		pos := [3]float64{st.Position.X, st.Position.Y, st.Position.Z}
-		theraStationPositionsMu.Lock()
-		theraStationPositionsCache[sid] = pos
-		theraStationPositionsMu.Unlock()
-		positions = append(positions, pos)
-		time.Sleep(100 * time.Millisecond) // ESI rate limiting
-	}
+	stationsByIDMu.RUnlock()
 	return positions
 }
 
-// getStationIDByName finds a station ID by name in a system
-// Checks loaded trade hubs and jump clone stations first (from JSON), then cache, then ESI
-// Returns station ID if found, 0 if not found
+// getStationIDByName finds a station ID by name in a system, from SDE data.
+// Checks loaded trade hubs and jump clone stations first (from JSON), then SDE.
 func getStationIDByName(systemID int, stationName string) int {
 	if stationName == "" {
 		return 0
@@ -1484,287 +1407,41 @@ func getStationIDByName(systemID int, stationName string) int {
 		}
 	}
 
-	// Don't use station IDs from jump_clone_stations.json as they may be incorrect
-	// Always fetch from ESI based on station name
-
-	// Check cache
-	cacheKey := fmt.Sprintf("%d:%s", systemID, stationName)
-	stationNameCacheMu.RLock()
-	if stationID, found := stationNameCache[cacheKey]; found {
-		stationNameCacheMu.RUnlock()
-		return stationID
-	}
-	stationNameCacheMu.RUnlock()
-
-	// Not in cache, fetch from ESI
-	// Rate limiting
-	elapsed := time.Since(lastAPIRequest)
-	if elapsed < time.Second {
-		time.Sleep(time.Second - elapsed)
-	}
-	lastAPIRequest = time.Now()
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	// Get station IDs from system info (use cache if available)
-	systemInfoCacheMu.RLock()
-	stationIDs, cached := systemInfoCache[systemID]
-	systemInfoCacheMu.RUnlock()
-
-	if !cached {
-		// Fetch system info which includes station IDs
-		url := fmt.Sprintf("https://esi.evetech.net/latest/universe/systems/%d/?datasource=tranquility", systemID)
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			logging.Debugf("Failed to create request for system %d: %v", systemID, err)
-			stationNameCacheMu.Lock()
-			stationNameCache[cacheKey] = 0
-			stationNameCacheMu.Unlock()
-			return 0
-		}
-		setUserAgent(req)
-		resp, err := client.Do(req)
-		if err != nil {
-			logging.Debugf("Failed to fetch stations for system %d: %v", systemID, err)
-			stationNameCacheMu.Lock()
-			stationNameCache[cacheKey] = 0
-			stationNameCacheMu.Unlock()
-			return 0
-		}
-		defer resp.Body.Close()
-		log.Printf("ESI request: GET /universe/systems/%d/ -> HTTP %d", systemID, resp.StatusCode)
-
-		if resp.StatusCode != http.StatusOK {
-			logging.Debugf("Failed to fetch stations for system %d: HTTP %d", systemID, resp.StatusCode)
-			stationNameCacheMu.Lock()
-			stationNameCache[cacheKey] = 0
-			stationNameCacheMu.Unlock()
-			return 0
-		}
-
-		var systemInfo struct {
-			Stations []int `json:"stations"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&systemInfo); err != nil {
-			logging.Debugf("Failed to decode stations for system %d: %v", systemID, err)
-			stationNameCacheMu.Lock()
-			stationNameCache[cacheKey] = 0
-			stationNameCacheMu.Unlock()
-			return 0
-		}
-		stationIDs = systemInfo.Stations
-
-		systemInfoCacheMu.Lock()
-		systemInfoCache[systemID] = stationIDs
-		systemInfoCacheMu.Unlock()
-	}
-
-	// Fetch each station's details to match by name
-	stationID := 0
-	for _, sid := range stationIDs {
-		// Check cache for station details
-		stationDetailCacheMu.RLock()
-		stationDetail, cached := stationDetailCache[sid]
-		stationDetailCacheMu.RUnlock()
-
-		var stationNameFound string
-		if cached {
-			stationNameFound = stationDetail.Name
-		} else {
-			// Rate limiting between station detail fetches
-			elapsed := time.Since(lastAPIRequest)
-			if elapsed < time.Second {
-				time.Sleep(time.Second - elapsed)
-			}
-			lastAPIRequest = time.Now()
-
-			stationURL := fmt.Sprintf("https://esi.evetech.net/latest/universe/stations/%d/?datasource=tranquility", sid)
-			sReq, err := http.NewRequest("GET", stationURL, nil)
-			if err != nil {
-				log.Printf("ESI request: GET /universe/stations/%d/ (station name) -> ERROR: %v", sid, err)
-				continue
-			}
-			sReq.Header.Set("User-Agent", httpUserAgent)
-			stationResp, err := client.Do(sReq)
-			if err != nil {
-				log.Printf("ESI request: GET /universe/stations/%d/ (station name) -> ERROR: %v", sid, err)
-				continue
-			}
-			log.Printf("ESI request: GET /universe/stations/%d/ (station name) -> HTTP %d", sid, stationResp.StatusCode)
-			if stationResp.StatusCode != http.StatusOK {
-				_ = stationResp.Body.Close()
-				continue
-			}
-
-			// Only decode Name - SystemID comes from SDE (we already know it's systemID)
-			var station struct {
-				Name string `json:"name"`
-			}
-			if err := json.NewDecoder(stationResp.Body).Decode(&station); err != nil {
-				_ = stationResp.Body.Close()
-				continue
-			}
-			_ = stationResp.Body.Close()
-
-			stationNameFound = station.Name
-
-			// Cache the station details (SystemID is known from context)
-			stationDetailCacheMu.Lock()
-			stationDetailCache[sid] = struct {
-				Name     string
-				SystemID int
-			}{
-				Name:     station.Name,
-				SystemID: systemID, // Use known systemID instead of fetching from ESI
-			}
-			stationDetailCacheMu.Unlock()
-		}
-
-		// Match by name (case-insensitive)
-		if strings.EqualFold(stationNameFound, stationName) {
-			stationID = sid
-			break
+	// Look up from SDE station data
+	systemStationsMu.RLock()
+	ids := systemStations[systemID]
+	systemStationsMu.RUnlock()
+	stationsByIDMu.RLock()
+	defer stationsByIDMu.RUnlock()
+	for _, sid := range ids {
+		if s, ok := stationsByID[sid]; ok && strings.EqualFold(s.Name, stationName) {
+			return s.StationID
 		}
 	}
-
-	// Cache the result
-	stationNameCacheMu.Lock()
-	stationNameCache[cacheKey] = stationID
-	stationNameCacheMu.Unlock()
-
-	return stationID
+	return 0
 }
 
-// verifyStationID verifies a station ID exists and returns its system ID and name
-// Uses caching to avoid repeated ESI calls
-// Returns: systemID, stationName, error
+// verifyStationID looks up a station ID in SDE data and returns its system ID and name.
 func verifyStationID(stationID int) (int, string, error) {
-	// Check cache first
-	stationVerificationCacheMu.RLock()
-	if cached, found := stationVerificationCache[stationID]; found {
-		stationVerificationCacheMu.RUnlock()
-		if cached.Verified {
-			return cached.SystemID, cached.StationName, nil
-		}
-		return 0, "", fmt.Errorf("station %d previously failed verification", stationID)
+	stationsByIDMu.RLock()
+	s, ok := stationsByID[stationID]
+	stationsByIDMu.RUnlock()
+	if !ok {
+		return 0, "", fmt.Errorf("station %d not found in SDE", stationID)
 	}
-	stationVerificationCacheMu.RUnlock()
-
-	// Rate limiting
-	elapsed := time.Since(lastAPIRequest)
-	if elapsed < time.Second {
-		time.Sleep(time.Second - elapsed)
-	}
-	lastAPIRequest = time.Now()
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	// Fetch station details from ESI
-	url := fmt.Sprintf("https://esi.evetech.net/latest/universe/stations/%d/?datasource=tranquility", stationID)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		stationVerificationCacheMu.Lock()
-		stationVerificationCache[stationID] = struct {
-			SystemID    int
-			StationName string
-			Verified    bool
-		}{Verified: false}
-		stationVerificationCacheMu.Unlock()
-		return 0, "", fmt.Errorf("failed to create request for station: %v", err)
-	}
-	setUserAgent(req)
-	resp, err := client.Do(req)
-	if err != nil {
-		stationVerificationCacheMu.Lock()
-		stationVerificationCache[stationID] = struct {
-			SystemID    int
-			StationName string
-			Verified    bool
-		}{Verified: false}
-		stationVerificationCacheMu.Unlock()
-		return 0, "", fmt.Errorf("failed to fetch station: %v", err)
-	}
-	defer resp.Body.Close()
-	log.Printf("ESI request: GET /universe/stations/%d/ (verify) -> HTTP %d", stationID, resp.StatusCode)
-
-	if resp.StatusCode != http.StatusOK {
-		// Cache failure
-		stationVerificationCacheMu.Lock()
-		stationVerificationCache[stationID] = struct {
-			SystemID    int
-			StationName string
-			Verified    bool
-		}{Verified: false}
-		stationVerificationCacheMu.Unlock()
-		return 0, "", fmt.Errorf("station not found: HTTP %d", resp.StatusCode)
-	}
-
-	var station struct {
-		Name     string `json:"name"`
-		SystemID int    `json:"system_id"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&station); err != nil {
-		// Cache failure
-		stationVerificationCacheMu.Lock()
-		stationVerificationCache[stationID] = struct {
-			SystemID    int
-			StationName string
-			Verified    bool
-		}{Verified: false}
-		stationVerificationCacheMu.Unlock()
-		return 0, "", fmt.Errorf("failed to decode station: %v", err)
-	}
-
-	// Cache success
-	stationVerificationCacheMu.Lock()
-	stationVerificationCache[stationID] = struct {
-		SystemID    int
-		StationName string
-		Verified    bool
-	}{
-		SystemID:    station.SystemID,
-		StationName: station.Name,
-		Verified:    true,
-	}
-	stationVerificationCacheMu.Unlock()
-
-	return station.SystemID, station.Name, nil
+	return s.SystemID, s.Name, nil
 }
 
 // getStationIDForSystem gets the first station ID for a system, with caching
 // Returns station ID if found in cache, 0 if not cached or no station exists
 // Does NOT make ESI requests - only returns cached values to avoid blocking HTML rendering
 func getStationIDForSystem(systemID int) int {
-	// Check cache first
-	systemStationCacheMu.RLock()
-	if stationID, found := systemStationCache[systemID]; found {
-		systemStationCacheMu.RUnlock()
-		return stationID
+	systemStationsMu.RLock()
+	ids := systemStations[systemID]
+	systemStationsMu.RUnlock()
+	if len(ids) > 0 {
+		return ids[0]
 	}
-	systemStationCacheMu.RUnlock()
-
-	// Check if we have system info cached (station IDs list)
-	systemInfoCacheMu.RLock()
-	stationIDs, cached := systemInfoCache[systemID]
-	systemInfoCacheMu.RUnlock()
-
-	if cached && len(stationIDs) > 0 {
-		// Use first station ID from cached system info
-		stationID := stationIDs[0]
-		// Cache the result
-		systemStationCacheMu.Lock()
-		systemStationCache[systemID] = stationID
-		systemStationCacheMu.Unlock()
-		return stationID
-	}
-
-	// Not in cache - return 0 without making ESI request
-	// This prevents blocking HTML rendering with ESI requests
 	return 0
 }
 
@@ -1793,6 +1470,108 @@ func convertSystemsToRoutefinder(mainSystems []System) []routefinder.System {
 func setUserAgent(req *http.Request) {
 	req.Header.Set("User-Agent", httpUserAgent)
 	req.Header.Set("X-User-Agent", httpUserAgent)
+}
+
+var esiClient *http.Client
+var esiClientOnce sync.Once
+
+func getESIClient() *http.Client {
+	esiClientOnce.Do(func() {
+		transport := &http.Transport{
+			MaxIdleConns:    10,
+			IdleConnTimeout: 90 * time.Second,
+		}
+		esiClient = &http.Client{
+			Timeout:   15 * time.Second,
+			Transport: transport,
+		}
+	})
+	return esiClient
+}
+
+const (
+	esiMaxRetries        = 3
+	esiRetryBaseDelay    = 1 * time.Second
+	esiRetryMaxDelay     = 10 * time.Second
+	esiErrorWarnThreshold = 20
+)
+
+func esiDo(req *http.Request) (*http.Response, error) {
+	client := getESIClient()
+	var resp *http.Response
+	var err error
+	start := time.Now()
+	defer func() {
+		esiRequestDuration.Observe(time.Since(start).Seconds())
+		esiRequestsTotal.Inc()
+	}()
+
+	for attempt := 0; attempt <= esiMaxRetries; attempt++ {
+		if attempt > 0 {
+			delay := esiRetryBaseDelay * (1 << (attempt - 1))
+			if delay > esiRetryMaxDelay {
+				delay = esiRetryMaxDelay
+			}
+			log.Printf("ESI retry %d/%d after %v", attempt, esiMaxRetries, delay)
+			esiRetriesTotal.Inc()
+			time.Sleep(delay)
+		}
+
+		resp, err = client.Do(req)
+		if err != nil {
+			esiErrorsTotal.Inc()
+			return nil, fmt.Errorf("esi request failed: %w", err)
+		}
+
+		if remain := resp.Header.Get("X-ESI-Error-Limit-Remain"); remain != "" {
+			if v, err := strconv.Atoi(remain); err == nil {
+				esiErrorLimitRemainGauge.Set(float64(v))
+				if v < esiErrorWarnThreshold {
+					log.Printf("ESI error limit remain: %d (low!)", v)
+				}
+			}
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == 420 {
+			retryAfter := resp.Header.Get("Retry-After")
+			resetSeconds := resp.Header.Get("X-ESI-Error-Limit-Reset")
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			resp.Body = nil
+			esiErrorsTotal.Inc()
+			if attempt < esiMaxRetries {
+				var delay time.Duration
+				if retryAfter != "" {
+					if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil {
+						delay = time.Duration(seconds) * time.Second
+					}
+				}
+				if delay == 0 && resetSeconds != "" {
+					if seconds, parseErr := strconv.Atoi(resetSeconds); parseErr == nil && seconds > 0 {
+						delay = time.Duration(seconds) * time.Second
+					}
+				}
+				if delay == 0 || delay > esiRetryMaxDelay {
+					delay = esiRetryBaseDelay * (1 << attempt)
+					if delay > esiRetryMaxDelay {
+						delay = esiRetryMaxDelay
+					}
+				}
+				log.Printf("ESI rate limited (%d), retrying in %v: %s", resp.StatusCode, delay, strings.TrimSpace(string(body)))
+				time.Sleep(delay)
+				continue
+			}
+			return nil, fmt.Errorf("esi rate limited after %d retries: %d %s", esiMaxRetries, resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			esiErrorsTotal.Inc()
+		}
+
+		break
+	}
+
+	return resp, nil
 }
 
 func startup(mw io.Writer) {
@@ -1852,6 +1631,7 @@ func startup(mw io.Writer) {
 	}
 	initCORSAllowlist(mw)
 	parseSystems(mw)
+	loadStations(mw)
 	parseGroups(mw)
 	parseTypes(mw)
 	parseTypeToGroup(mw)
@@ -2043,6 +1823,27 @@ func parseSystems(mw io.Writer) bool {
 
 	fmt.Fprintln(mw, "Loaded", len(systems), "systems from SDE and saved to systems.json")
 	return false
+}
+
+func loadStations(mw io.Writer) {
+	stationList, err := getStationsFromSDE()
+	if err != nil {
+		fmt.Fprintln(mw, "Error loading stations from SDE:", err)
+		return
+	}
+	byID := make(map[int]StationSDE, len(stationList))
+	bySystem := make(map[int][]int)
+	for _, s := range stationList {
+		byID[s.StationID] = s
+		bySystem[s.SystemID] = append(bySystem[s.SystemID], s.StationID)
+	}
+	stationsByIDMu.Lock()
+	stationsByID = byID
+	stationsByIDMu.Unlock()
+	systemStationsMu.Lock()
+	systemStations = bySystem
+	systemStationsMu.Unlock()
+	fmt.Fprintln(mw, "Loaded", len(stationList), "stations from SDE")
 }
 
 func getSystemById(id int) System {
@@ -4169,13 +3970,6 @@ func loadMockData(mw io.Writer) {
 	}
 
 	// Add Thera camp kill: in Thera, not at station, >10k km from stations, Interdictor involved
-	// Pre-populate Thera station positions for distance check (mock positions at origin)
-	theraStationPositionsMu.Lock()
-	theraStationPositionsCache[TheraStationID1] = [3]float64{0, 0, 0}
-	theraStationPositionsCache[TheraStationID2] = [3]float64{0, 0, 0}
-	theraStationPositionsCache[TheraStationID3] = [3]float64{0, 0, 0}
-	theraStationPositionsCache[TheraStationID4] = [3]float64{0, 0, 0}
-	theraStationPositionsMu.Unlock()
 	theraCampKillmailID := 100100
 	theraCampKillTime := baseTime.Add(12 * time.Minute)
 	// Position 15 billion m from origin (stations at 0,0,0) = 15M km, well over 10k km
@@ -6214,8 +6008,7 @@ func ssoLocationHandler(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
 	setUserAgent(req)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req) // #nosec G704 -- req uses esiURL (host esi.evetech.net)
+	resp, err := esiDo(req)
 	if err != nil {
 		http.Error(w, "Failed to fetch location from ESI", http.StatusInternalServerError)
 		return
@@ -6278,8 +6071,7 @@ func proximityHandler(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
 	setUserAgent(req)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req) // #nosec G704 -- req uses esiURL
+	resp, err := esiDo(req)
 	if err != nil {
 		http.Error(w, "Failed to fetch location from ESI", http.StatusInternalServerError)
 		return
@@ -6434,8 +6226,7 @@ func checkCharacterOnline(session *SSOSession) (bool, error) {
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
 	setUserAgent(req)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req) // #nosec G704 -- esiURL host fixed to esi.evetech.net
+	resp, err := esiDo(req)
 	if err != nil {
 		return false, fmt.Errorf("failed to fetch online status from ESI: %w", err)
 	}
@@ -6563,8 +6354,7 @@ func ssoWaypointHandler(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
 	setUserAgent(req)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req) // #nosec G704 -- esiURL host fixed to esi.evetech.net
+	resp, err := esiDo(req)
 	if err != nil {
 		http.Error(w, "Failed to set waypoint via ESI", http.StatusInternalServerError)
 		return

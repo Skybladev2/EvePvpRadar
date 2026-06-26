@@ -643,6 +643,86 @@ func getStargatesFromSDE() (map[int][]Stargate, error) {
 	return stargates, nil
 }
 
+// StationSDE represents an NPC station from the SDE staStations file
+type StationSDE struct {
+	StationID int
+	Name      string
+	SystemID  int
+	Position  [3]float64
+}
+
+// getStationsFromSDE reads station data from staStations.jsonl in the SDE
+func getStationsFromSDE() ([]StationSDE, error) {
+	stations := []StationSDE{}
+
+	stationsFile := ""
+	err := filepath.Walk(sdeExtractDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasSuffix(info.Name(), "staStations.jsonl") {
+			stationsFile = path
+			return io.EOF
+		}
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("error searching for staStations.jsonl: %v", err)
+	}
+	if stationsFile == "" {
+		return nil, fmt.Errorf("staStations.jsonl not found in SDE")
+	}
+
+	log.Printf("Reading stations from %s", stationsFile)
+	content, err := os.ReadFile(stationsFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read stations file: %v", err)
+	}
+	lines := strings.Split(string(content), "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			log.Printf("Warning: failed to parse station line %d: %v", i+1, err)
+			continue
+		}
+		key, ok := raw["_key"].(float64)
+		if !ok {
+			continue
+		}
+		name, ok := raw["stationName"].(string)
+		if !ok {
+			continue
+		}
+		systemID, ok := raw["solarSystemID"].(float64)
+		if !ok {
+			continue
+		}
+		var pos [3]float64
+		if posObj, ok := raw["position"].(map[string]interface{}); ok {
+			if x, ok := posObj["x"].(float64); ok {
+				pos[0] = x
+			}
+			if y, ok := posObj["y"].(float64); ok {
+				pos[1] = y
+			}
+			if z, ok := posObj["z"].(float64); ok {
+				pos[2] = z
+			}
+		}
+		stations = append(stations, StationSDE{
+			StationID: int(key),
+			Name:      name,
+			SystemID:  int(systemID),
+			Position:  pos,
+		})
+	}
+	log.Printf("Loaded %d stations from SDE", len(stations))
+	return stations, nil
+}
+
 // loadSystemsFromSDE downloads, extracts, and loads systems and stargates from SDE
 func loadSystemsFromSDE() ([]System, error) {
 	// Download SDE if needed
