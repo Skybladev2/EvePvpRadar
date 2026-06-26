@@ -2587,16 +2587,6 @@ function applySecurityStatusClasses() {
         row.classList.add("system-highsec");
       }
     }
-    
-    // Classify system based on security status (for filtering)
-    // Highsec: >= 0.45, Lowsec: 0.1 to 0.4, Nullsec: <= 0.0
-    if (securityValue >= 0.45) {
-      row.classList.add("system-highsec");
-    } else if (securityValue > 0.0 && securityValue < 0.45) {
-      row.classList.add("system-lowsec");
-    } else if (securityValue <= 0.0) {
-      row.classList.add("system-nullsec");
-    }
   });
 
   // Colorize route system security numbers based on security status
@@ -3000,8 +2990,17 @@ function applySecurityFilters() {
   const showLowsec = filterLowsec ? filterLowsec.checked : true;
   const showNullsec = filterNullsec ? filterNullsec.checked : true;
   const hideGatecamps = filterGatecamps ? filterGatecamps.checked : false;
-
   const hasHiddenHubs = mode === "near_trade_hubs" && hiddenTradeHubs.size > 0;
+
+  // Fast path: no filters active — clear all rows and exit
+  if (showLowsec && showNullsec && !hideGatecamps && !hasHiddenHubs && maxAttackersLimit < 1 && pilotOnlyCharacterIds.size === 0) {
+    for (const row of resultTable.querySelectorAll("tbody tr.filtered-out")) {
+      row.classList.remove("filtered-out");
+    }
+    updateFilterIndicator({ lowsec: 0, nullsec: 0, pilot: 0, tradeHub: 0, gatecamps: 0, maxAttackers: 0 });
+    updateGatecampFilterHintIconsVisibility(false);
+    return;
+  }
 
   // Keep trade hub filter icon state in sync with the current filter state.
   resultTable.querySelectorAll(".trade-hub-filter-btn").forEach(btn => {
@@ -3024,108 +3023,47 @@ function applySecurityFilters() {
 
   const rows = resultTable.querySelectorAll("tbody tr");
   rows.forEach(row => {
-    // Remove filtered-out class first
     row.classList.remove("filtered-out");
-
-    // --- Count rows hidden by each filter independently ---
-
-    if (row.classList.contains("system-lowsec") && !showLowsec) hiddenByLowsec++;
-    if (row.classList.contains("system-nullsec") && !showNullsec) hiddenByNullsec++;
-
-    if (pilotOnlyCharacterIds.size > 0) {
-      let anyMatch = false;
-      for (const cid of pilotOnlyCharacterIds) {
-        if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
-          anyMatch = true;
-          break;
-        }
-      }
-      if (!anyMatch) hiddenByPilot++;
-    }
-
-    if (hasHiddenHubs) {
-      const tradeHubCell = row.querySelector("td[data-trade-hub]");
-      const rowTradeHubName = tradeHubCell
-        ? ((tradeHubCell.getAttribute("data-trade-hub") || tradeHubCell.textContent || "").trim().toLowerCase())
-        : "";
-      if (rowTradeHubName && hiddenTradeHubs.has(rowTradeHubName)) hiddenByTradeHub++;
-    }
-
-    if (hideGatecamps) {
-      const cells = row.querySelectorAll("td");
-      let distanceCell = null;
-      for (let i = 0; i < cells.length; i++) {
-        if (cells[i].querySelector(".distance-value")) {
-          distanceCell = cells[i];
-          break;
-        }
-      }
-      if (distanceCell && distanceCell.querySelector(".route-warning-sign")) hiddenByGatecamps++;
-    }
-
-    if (maxAttackersLimit > 0) {
-      const killmailRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
-      for (const km of killmailRows) {
-        const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
-        if (n > maxAttackersLimit) {
-          hiddenByMaxAttackers++;
-          break;
-        }
-      }
-    }
-
-    // --- Existing shouldHide logic (with short-circuit) unchanged ---
     let shouldHide = false;
-    
-    if (row.classList.contains("system-lowsec") && !showLowsec) {
-      shouldHide = true;
-    } else if (row.classList.contains("system-nullsec") && !showNullsec) {
-      shouldHide = true;
-    }
-    
+
+    if (row.classList.contains("system-lowsec") && !showLowsec) { hiddenByLowsec++; shouldHide = true; }
+    else if (row.classList.contains("system-nullsec") && !showNullsec) { hiddenByNullsec++; shouldHide = true; }
+
     if (!shouldHide && pilotOnlyCharacterIds.size > 0) {
       let anyMatch = false;
       for (const cid of pilotOnlyCharacterIds) {
-        if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
-          anyMatch = true;
-          break;
-        }
+        if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) { anyMatch = true; break; }
       }
-      if (!anyMatch) {
-        shouldHide = true;
-      }
+      if (!anyMatch) { hiddenByPilot++; shouldHide = true; }
     }
 
     if (!shouldHide && hasHiddenHubs) {
-      const tradeHubCell = row.querySelector("td[data-trade-hub]");
-      const rowTradeHubName = tradeHubCell
-        ? ((tradeHubCell.getAttribute("data-trade-hub") || tradeHubCell.textContent || "").trim().toLowerCase())
-        : "";
-      if (rowTradeHubName && hiddenTradeHubs.has(rowTradeHubName)) {
-        shouldHide = true;
+      const cell = row.querySelector("td[data-trade-hub]");
+      if (cell) {
+        const name = (cell.getAttribute("data-trade-hub") || "").trim().toLowerCase();
+        if (name && hiddenTradeHubs.has(name)) { hiddenByTradeHub++; shouldHide = true; }
       }
     }
 
     if (!shouldHide && hideGatecamps) {
       const cells = row.querySelectorAll("td");
-      let distanceCell = null;
       for (let i = 0; i < cells.length; i++) {
         if (cells[i].querySelector(".distance-value")) {
-          distanceCell = cells[i];
-          break;
-        }
-      }
-      if (distanceCell && distanceCell.querySelector(".route-warning-sign")) {
-        shouldHide = true;
-        if (pilotOnlyCharacterIds.size > 0) {
-          for (const cid of pilotOnlyCharacterIds) {
-            if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
-              gatecampHidSelectedPilotRows = true;
-              const systemName = getRowSystemDisplayName(row);
-              if (systemName) hiddenSystemsForSelectedPilots.add(systemName);
-              break;
+          if (cells[i].querySelector(".route-warning-sign")) {
+            hiddenByGatecamps++;
+            shouldHide = true;
+            if (pilotOnlyCharacterIds.size > 0) {
+              for (const cid of pilotOnlyCharacterIds) {
+                if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
+                  gatecampHidSelectedPilotRows = true;
+                  const systemName = getRowSystemDisplayName(row);
+                  if (systemName) hiddenSystemsForSelectedPilots.add(systemName);
+                  break;
+                }
+              }
             }
           }
+          break;
         }
       }
     }
@@ -3134,16 +3072,11 @@ function applySecurityFilters() {
       const kmRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
       for (const km of kmRows) {
         const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
-        if (n > maxAttackersLimit) {
-          shouldHide = true;
-          break;
-        }
+        if (n > maxAttackersLimit) { hiddenByMaxAttackers++; shouldHide = true; break; }
       }
     }
-    
-    if (shouldHide) {
-      row.classList.add("filtered-out");
-    }
+
+    if (shouldHide) row.classList.add("filtered-out");
   });
 
   updateFilterIndicator({
@@ -3179,28 +3112,25 @@ function initializeSorting() {
     // Skip Notes column (last column)
     if (index === headers.length - 1) return;
     
-    // Check if header text contains "Notes" (in case column order changes)
     const headerText = header.textContent.trim();
     if (headerText === "Notes" || headerText.includes("Notes")) return;
+    
+    // Skip if already initialized (sortable class present)
+    if (header.classList.contains("sortable")) return;
     
     // Make header sortable
     header.classList.add("sortable");
     
-    // Remove existing click handlers by cloning
-    const newHeader = header.cloneNode(true);
-    header.parentNode.replaceChild(newHeader, header);
-    
     // Check if this is the Recency column in near_trade_hubs or proximity mode
-    // Recency is sorted ascending by default from the backend
     const checkedMode = document.querySelector("input[name='mode']:checked");
     const mode = checkedMode ? checkedMode.value : null;
     if (headerText.includes("Recency") && (mode === "near_trade_hubs" || mode === "proximity")) {
-      newHeader.classList.add("sort-asc");
+      header.classList.add("sort-asc");
     }
     
-    newHeader.addEventListener("click", function(e) {
+    header.addEventListener("click", function(e) {
       if (e.target && e.target.closest && e.target.closest("#filter-indicator")) return;
-      sortTable(index, newHeader);
+      sortTable(index, header);
     });
   });
 }
@@ -3213,9 +3143,6 @@ function sortTable(columnIndex, header) {
   const tbody = resultTable.querySelector("tbody");
   if (!tbody) return;
 
-  // Get all rows (including filtered ones, we'll handle them separately)
-  const rows = Array.from(tbody.querySelectorAll("tr"));
-  
   // Determine sort direction
   const isAscending = !header.classList.contains("sort-asc");
   
@@ -3229,110 +3156,87 @@ function sortTable(columnIndex, header) {
   header.classList.add(isAscending ? "sort-asc" : "sort-desc");
   
   // Sort rows
+  const rows = Array.from(tbody.querySelectorAll("tr"));
   rows.sort((a, b) => {
     const aCell = a.cells[columnIndex];
     const bCell = b.cells[columnIndex];
-    
     if (!aCell || !bCell) return 0;
-    
     const aValue = getCellValue(aCell, columnIndex);
     const bValue = getCellValue(bCell, columnIndex);
-    
-    let comparison = 0;
-    
-    // Handle different data types
     if (typeof aValue === "number" && typeof bValue === "number") {
-      comparison = aValue - bValue;
-    } else {
-      // String comparison
-      const aStr = String(aValue || "").toLowerCase();
-      const bStr = String(bValue || "").toLowerCase();
-      comparison = aStr.localeCompare(bStr);
+      return isAscending ? aValue - bValue : bValue - aValue;
     }
-    
-    return isAscending ? comparison : -comparison;
+    const aStr = String(aValue || "").toLowerCase();
+    const bStr = String(bValue || "").toLowerCase();
+    return isAscending ? aStr.localeCompare(bStr) : bStr.localeCompare(aStr);
   });
   
-  // Re-append sorted rows
-  rows.forEach(row => tbody.appendChild(row));
+  // Batch-reorder rows in a single DOM mutation
+  const fragment = document.createDocumentFragment();
+  for (let i = 0; i < rows.length; i++) fragment.appendChild(rows[i]);
+  tbody.replaceChildren(fragment);
   
-  // Re-apply security filters to maintain filter state
-  applySecurityFilters();
+  // Re-apply security filters only when filters are active
+  if (hasActiveFilters()) applySecurityFilters();
+}
+
+function hasActiveFilters() {
+  const fl = document.getElementById("filter-lowsec");
+  const fn = document.getElementById("filter-nullsec");
+  const fg = document.getElementById("filter-gatecamps");
+  if (fl && !fl.checked) return true;
+  if (fn && !fn.checked) return true;
+  if (fg && fg.checked) return true;
+  return maxAttackersLimit > 0 ||
+         pilotOnlyCharacterIds.size > 0 ||
+         hiddenTradeHubs.size > 0;
 }
 
 // Extract sortable value from cell
 function getCellValue(cell, columnIndex) {
-  const cellText = cell.textContent.trim();
-  
-  // Get header text to determine column type
-  const resultTable = document.getElementById("result");
-  if (!resultTable) return cellText;
-  
-  const headers = resultTable.querySelectorAll("thead th");
-  if (columnIndex >= headers.length) return cellText;
-  
-  const headerText = headers[columnIndex].textContent.trim();
-  
-  // Range column: extract numeric value, ignoring warning sign and suffixes
-  // Header can be "Range" or "Range\u00A0ⓘ" (backend uses NBSP before icon), so match any that starts with "Range"
+  const cache = getCellValue._cache || (getCellValue._cache = {});
+  if (!cache.headers) {
+    const t = document.getElementById("result");
+    cache.headers = t ? Array.from(t.querySelectorAll("thead th")) : [];
+  }
+  if (columnIndex >= cache.headers.length) return cell.textContent.trim();
+  const headerText = cache.headers[columnIndex].textContent.trim();
+
   if (headerText.startsWith("Range")) {
-    // Extract the first number from the cell text
-    // This handles cases like "⚠ 5 (Thera)" or "10 (Zarzakh)" or just "15"
-    const match = cellText.match(/(\d+)/);
-    if (match) {
-      return parseInt(match[1], 10);
-    }
-    return 0;
+    const dv = cell.querySelector(".distance-value");
+    const t = dv ? dv.textContent : cell.textContent;
+    const match = t.match(/(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
   }
-  
-  // Recency column: check for data-recency attribute first
+
   if (headerText.includes("Recency")) {
-    const recencyAttr = cell.getAttribute("data-recency");
-    if (recencyAttr) {
-      const recencyValue = parseInt(recencyAttr, 10);
-      if (!isNaN(recencyValue)) {
-        return recencyValue;
-      }
-    }
-    // Fallback to parsing text
-    const match = cellText.match(/(\d+)/);
-    if (match) {
-      return parseInt(match[1], 10);
-    }
-    return 0;
+    const attr = cell.getAttribute("data-recency");
+    if (attr) { const v = parseInt(attr, 10); if (!isNaN(v)) return v; }
+    const match = cell.textContent.match(/(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
   }
-  
-  // System or Trade Hub: use text content
-  // For system names, check if there's a link
+
   const link = cell.querySelector("a");
-  if (link) {
-    return link.textContent.trim();
-  }
-  
-  return cellText;
+  return link ? link.textContent.trim() : cell.textContent.trim();
 }
 
 // Bind jump clone station destination buttons to handle clicks
 function bindJumpCloneDestinationButtons() {
   const buttons = document.querySelectorAll(".jump-clone-destination-btn");
   buttons.forEach(button => {
-    // Remove existing listeners by cloning
-    const newButton = button.cloneNode(true);
-    button.parentNode.replaceChild(newButton, button);
-    
-    newButton.addEventListener("click", async function(e) {
+    button.addEventListener("click", async function(e) {
       e.preventDefault();
       e.stopPropagation();
 
       // Keep success result visible until user clicks to clear it.
-      if (newButton.getAttribute("data-success") === "true") {
-        clearDestinationSuccessState(newButton);
+      if (button.getAttribute("data-success") === "true") {
+        clearDestinationSuccessState(button);
         return;
       }
       
-      const systemID = parseInt(newButton.getAttribute("data-system-id"));
-      const systemName = newButton.getAttribute("data-system-name");
-      const stationIDAttr = newButton.getAttribute("data-station-id");
+      const systemID = parseInt(button.getAttribute("data-system-id"));
+      const systemName = button.getAttribute("data-system-name");
+      const stationIDAttr = button.getAttribute("data-station-id");
       const stationID = stationIDAttr ? parseInt(stationIDAttr) : null;
       
       if (!systemID) {
@@ -3343,8 +3247,8 @@ function bindJumpCloneDestinationButtons() {
       debugLog("CLIENT: Setting jump clone destination - system:", systemName, "systemID:", systemID, "stationID:", stationID);
       
       // Disable button during request
-      newButton.disabled = true;
-      newButton.textContent = "Setting...";
+      button.disabled = true;
+      button.textContent = "Setting...";
       
       try {
         // Set destination to the jump clone station (always clear waypoints first)
@@ -3371,7 +3275,7 @@ function bindJumpCloneDestinationButtons() {
           if (response.status === 409) {
             const errorText = await response.text();
             showToast(errorText || "Character is offline. Log into EVE Online and try again.");
-            clearDestinationSuccessState(newButton);
+            clearDestinationSuccessState(button);
             return;
           }
           const errorText = await response.text();
@@ -3380,20 +3284,20 @@ function bindJumpCloneDestinationButtons() {
         
         const data = await response.json();
         if (data.success) {
-          clearAllDestinationSuccessStates(newButton);
+          clearAllDestinationSuccessStates(button);
           // Show success feedback
-          newButton.textContent = "✓ Set!";
-          newButton.style.backgroundColor = "#4CAF50";
-          newButton.style.color = "white";
-          newButton.disabled = false;
-          newButton.setAttribute("data-success", "true");
+          button.textContent = "✓ Set!";
+          button.style.backgroundColor = "#4CAF50";
+          button.style.color = "white";
+          button.disabled = false;
+          button.setAttribute("data-success", "true");
         } else {
           throw new Error("Failed to set waypoint");
         }
       } catch (error) {
         console.error("CLIENT: Error setting jump clone destination:", error);
         showToast(`Failed to set destination to ${systemName}: ${error.message}`);
-        clearDestinationSuccessState(newButton);
+        clearDestinationSuccessState(button);
       }
     });
   });
@@ -3403,26 +3307,22 @@ function bindJumpCloneDestinationButtons() {
 function bindWaypointButtons() {
   const buttons = document.querySelectorAll(".set-destination-btn");
   buttons.forEach(button => {
-    // Remove existing listeners by cloning
-    const newButton = button.cloneNode(true);
-    button.parentNode.replaceChild(newButton, button);
-    
-    newButton.addEventListener("click", async function(e) {
+    button.addEventListener("click", async function(e) {
       e.preventDefault();
       e.stopPropagation();
 
       // Keep success result visible until user clicks to clear it.
-      if (newButton.getAttribute("data-success") === "true") {
-        clearDestinationSuccessState(newButton);
+      if (button.getAttribute("data-success") === "true") {
+        clearDestinationSuccessState(button);
         return;
       }
       
-      const systemID = parseInt(newButton.getAttribute("data-system-id"));
-      const systemName = newButton.getAttribute("data-system-name");
-      const stationIDAttr = newButton.getAttribute("data-station-id");
+      const systemID = parseInt(button.getAttribute("data-system-id"));
+      const systemName = button.getAttribute("data-system-name");
+      const stationIDAttr = button.getAttribute("data-station-id");
       const stationID = stationIDAttr ? parseInt(stationIDAttr) : null;
-      const viaThera = newButton.getAttribute("data-via-thera") === "true";
-      const routePathStr = newButton.getAttribute("data-route-path");
+      const viaThera = button.getAttribute("data-via-thera") === "true";
+      const routePathStr = button.getAttribute("data-route-path");
       
       if (!systemID) {
         console.error("CLIENT: Invalid system ID for waypoint");
@@ -3430,8 +3330,8 @@ function bindWaypointButtons() {
       }
       
       // Disable button during request
-      newButton.disabled = true;
-      newButton.textContent = "Setting...";
+      button.disabled = true;
+      button.textContent = "Setting...";
 
       // Track whether we've already cleared waypoints in this click flow
       let firstWaypointCleared = false;
@@ -3475,7 +3375,7 @@ function bindWaypointButtons() {
               if (firstResponse.status === 409) {
                 const errorText = await firstResponse.text();
                 showToast(errorText || "Character is offline. Log into EVE Online and try again.");
-                clearDestinationSuccessState(newButton);
+                clearDestinationSuccessState(button);
                 return;
               }
               const errorText = await firstResponse.text();
@@ -3516,7 +3416,7 @@ function bindWaypointButtons() {
           if (response.status === 409) {
             const errorText = await response.text();
             showToast(errorText || "Character is offline. Log into EVE Online and try again.");
-            clearDestinationSuccessState(newButton);
+            clearDestinationSuccessState(button);
             return;
           }
           const errorText = await response.text();
@@ -3525,20 +3425,20 @@ function bindWaypointButtons() {
         
         const data = await response.json();
         if (data.success) {
-          clearAllDestinationSuccessStates(newButton);
+          clearAllDestinationSuccessStates(button);
           // Show success feedback
-          newButton.textContent = "✓ Set!";
-          newButton.style.backgroundColor = "#4CAF50";
-          newButton.style.color = "white";
-          newButton.disabled = false;
-          newButton.setAttribute("data-success", "true");
+          button.textContent = "✓ Set!";
+          button.style.backgroundColor = "#4CAF50";
+          button.style.color = "white";
+          button.disabled = false;
+          button.setAttribute("data-success", "true");
         } else {
           throw new Error("Failed to set waypoint");
         }
       } catch (error) {
         console.error("CLIENT: Error setting waypoint:", error);
         showToast(`Failed to set destination to ${systemName}: ${error.message}`);
-        clearDestinationSuccessState(newButton);
+        clearDestinationSuccessState(button);
       }
     });
   });

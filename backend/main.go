@@ -3562,6 +3562,20 @@ func loadMockData(mw io.Writer) {
 	ensureSystemExists(&sysHek, hekSystem, "Mock-Hek-Near", -0.4)
 	updateSystemConnection(hekSystem, hekHubID)
 
+	// Generate additional mock systems to match real-world data volume (~100 total rows)
+	extraSystemCount := 90
+	extraSystemBaseID := 40003000
+	for i := range extraSystemCount {
+		systemID := extraSystemBaseID + i
+		security := -0.5 + float64(i)*0.008
+		if security > 0.4 {
+			security = 0.4
+		}
+		sysVar := getSystemById(systemID)
+		ensureSystemExists(&sysVar, systemID, fmt.Sprintf("Mock-Extra-%d", i+1), security)
+		updateSystemConnection(systemID, jitaHubID)
+	}
+
 	// Ensure Thera and Zarzakh systems exist in the systems list
 	theraSystem := getSystemById(TheraSystemID)
 	if theraSystem.SystemID == 0 {
@@ -3901,6 +3915,34 @@ func loadMockData(mw io.Writer) {
 
 		// Near Hek: Lowsec, 1 kill, < 10 attackers
 		{hekSystem, sysHek.SystemName, sysHek.Security, 1, 6, 100024, 4 * time.Minute, "stargates"},
+	}
+
+	// Add killmail entries for the extra mock systems
+	for i := range extraSystemCount {
+		systemID := extraSystemBaseID + i
+		sys := getSystemById(systemID)
+		if sys.SystemID == 0 {
+			continue
+		}
+		attackerCount := 3 + (i % 18)
+		killCount := 1
+		if i%3 == 0 {
+			killCount = 2
+		}
+		for j := range killCount {
+			killmailID := 1100000 + i*3 + j
+			timeOffset := time.Duration(((i * 3) + j) % 14) * time.Minute
+			mockKillmails = append(mockKillmails, struct {
+				systemID      int
+				systemName    string
+				security      float64
+				killCount     int
+				attackerCount int
+				killmailID    int
+				timeOffset    time.Duration
+				routeType     string
+			}{systemID, sys.SystemName, sys.Security, killCount, attackerCount, killmailID, timeOffset, "stargates"})
+		}
 	}
 
 	// Create mock Thera signatures with WhType information
