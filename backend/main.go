@@ -1195,12 +1195,15 @@ const theraCampMinDistanceFromStation = 10_000_000.0
 // characterNameCache caches character ID -> name from ESI (GET /characters/{id}/).
 // ESI rate limiting: https://developers.eveonline.com/docs/services/esi/rate-limiting/
 // We use low concurrency, staggered requests, and long cache to stay within limits.
+type characterNameCacheEntry struct {
+	name   string
+	errMsg string // user-facing tooltip when name lookup failed
+	expiry time.Time
+	etag   string
+}
+
 var (
-	characterNameCache = make(map[int]struct {
-		name   string
-		errMsg string // user-facing tooltip when name lookup failed
-		expiry time.Time
-	})
+	characterNameCache = make(map[int]characterNameCacheEntry)
 	characterNameCacheMu     sync.RWMutex
 	characterNameCacheTTL    = time.Hour
 	characterResolveSem      = make(chan struct{}, 2) // low concurrency to avoid bursting (best practice: don't operate at the limit)
@@ -1221,6 +1224,7 @@ func esiCharacterNameFailureMsg(characterID int, _ string) string {
 func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 	seen := make(map[int]struct{})
 	var need []int
+	needEtag := make(map[int]string)
 	cachedHits := 0
 	characterNameCacheMu.RLock()
 	for _, id := range ids {
@@ -1236,6 +1240,9 @@ func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 			continue
 		}
 		need = append(need, id)
+		if e, ok := characterNameCache[id]; ok {
+			needEtag[id] = e.etag
+		}
 	}
 	characterNameCacheMu.RUnlock()
 
@@ -1254,6 +1261,8 @@ func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 		name   string
 		ok     bool
 		errMsg string
+		etag   string
+		expiry time.Time
 	}
 	results := make(chan result, len(need))
 	for i, id := range need {
@@ -1272,6 +1281,9 @@ func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 				return
 			}
 			setUserAgent(req)
+			if etag := needEtag[id]; etag != "" {
+				req.Header.Set("If-None-Match", etag)
+			}
 			resp, err := esiDo(req)
 			if err != nil {
 				log.Printf("ESI request: GET /characters/%d/ (character name) failed: %v", id, err)
@@ -1279,6 +1291,31 @@ func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 				return
 			}
 			defer resp.Body.Close()
+
+			// 304 Not Modified — cached name is still current, extend expiry
+			if resp.StatusCode == http.StatusNotModified {
+				log.Printf("ESI request: GET /characters/%d/ (character name) -> HTTP 304 (cached)", id)
+				expiry := time.Now().Add(characterNameCacheTTL)
+				if expires := resp.Header.Get("Expires"); expires != "" {
+					if t, err := time.Parse(http.TimeFormat, expires); err == nil && t.Before(expiry) {
+						expiry = t
+					}
+				}
+				characterNameCacheMu.Lock()
+				e, ok := characterNameCache[id]
+				if ok {
+					e.expiry = expiry
+					characterNameCache[id] = e
+				}
+				characterNameCacheMu.Unlock()
+				if ok {
+					results <- result{id: id, name: e.name, ok: true, expiry: expiry}
+				} else {
+					results <- result{id: id, name: "", ok: false, errMsg: esiCharacterNameFailureMsg(id, "304 for unknown entry")}
+				}
+				return
+			}
+
 			log.Printf("ESI request: GET /characters/%d/ (character name) -> HTTP %d", id, resp.StatusCode)
 			if resp.StatusCode != http.StatusOK {
 				results <- result{id: id, name: "", ok: false, errMsg: esiCharacterNameFailureMsg(id, fmt.Sprintf("HTTP %d", resp.StatusCode))}
@@ -1295,21 +1332,29 @@ func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 				results <- result{id: id, name: "", ok: false, errMsg: esiCharacterNameFailureMsg(id, "empty name in response")}
 				return
 			}
-			results <- result{id: id, name: data.Name, ok: true}
+			expiry := time.Now().Add(characterNameCacheTTL)
+			if expires := resp.Header.Get("Expires"); expires != "" {
+				if t, err := time.Parse(http.TimeFormat, expires); err == nil && t.Before(expiry) {
+					expiry = t
+				}
+			}
+			results <- result{id: id, name: data.Name, ok: true, etag: resp.Header.Get("ETag"), expiry: expiry}
 		}()
 	}
 	for i := 0; i < len(need); i++ {
 		r := <-results
 		characterNameCacheMu.Lock()
-		ttl := characterNameCacheTTL
-		if !r.ok {
-			ttl = characterNameNegativeTTL
+		entry := characterNameCacheEntry{name: r.name, errMsg: r.errMsg, etag: r.etag}
+		if !r.expiry.IsZero() {
+			entry.expiry = r.expiry
+		} else {
+			ttl := characterNameCacheTTL
+			if !r.ok {
+				ttl = characterNameNegativeTTL
+			}
+			entry.expiry = time.Now().Add(ttl)
 		}
-		characterNameCache[r.id] = struct {
-			name   string
-			errMsg string
-			expiry time.Time
-		}{name: r.name, errMsg: r.errMsg, expiry: time.Now().Add(ttl)}
+		characterNameCache[r.id] = entry
 		characterNameCacheMu.Unlock()
 	}
 
@@ -1605,6 +1650,8 @@ func esiDo(req *http.Request) (*http.Response, error) {
 			}
 		}
 
+		logESIHeaders(resp)
+
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == 420 {
 			retryAfter := resp.Header.Get("Retry-After")
 			resetSeconds := resp.Header.Get("X-ESI-Error-Limit-Reset")
@@ -1645,6 +1692,38 @@ func esiDo(req *http.Request) (*http.Response, error) {
 	}
 
 	return resp, nil
+}
+
+func logESIHeaders(resp *http.Response) {
+	var parts []string
+
+	// New rate limiting bucket info
+	if rlGroup := resp.Header.Get("X-Ratelimit-Group"); rlGroup != "" {
+		if rlUsed := resp.Header.Get("X-Ratelimit-Used"); rlUsed != "" {
+			if rlRemain := resp.Header.Get("X-Ratelimit-Remaining"); rlRemain != "" {
+				parts = append(parts, fmt.Sprintf("ratelimit:%s used=%s remain=%s", rlGroup, rlUsed, rlRemain))
+			}
+		}
+		if rlReset := resp.Header.Get("X-Ratelimit-Reset"); rlReset != "" {
+			if t, err := time.Parse(time.RFC3339, rlReset); err == nil {
+				parts = append(parts, fmt.Sprintf("resets:%s", t.Local().Format(time.RFC3339)))
+			} else {
+				parts = append(parts, fmt.Sprintf("resets:%s", rlReset))
+			}
+		}
+	}
+
+	// Old error limit info
+	if elRemain := resp.Header.Get("X-ESI-Error-Limit-Remain"); elRemain != "" {
+		parts = append(parts, fmt.Sprintf("error-limit-remain:%s", elRemain))
+		if elReset := resp.Header.Get("X-ESI-Error-Limit-Reset"); elReset != "" {
+			parts = append(parts, fmt.Sprintf("error-limit-reset:%ss", elReset))
+		}
+	}
+
+	if len(parts) > 0 {
+		log.Printf("ESI rate headers: %s", strings.Join(parts, " "))
+	}
 }
 
 func startup(mw io.Writer) {
@@ -3551,11 +3630,7 @@ func loadMockData(mw io.Writer) {
 			return
 		}
 		characterNameCacheMu.Lock()
-		characterNameCache[characterID] = struct {
-			name   string
-			errMsg string
-			expiry time.Time
-		}{name: name, expiry: time.Now().Add(365 * 24 * time.Hour)}
+		characterNameCache[characterID] = characterNameCacheEntry{name: name, expiry: time.Now().Add(365 * 24 * time.Hour)}
 		characterNameCacheMu.Unlock()
 	}
 	setMockCharacterNameFailed := func(characterID int) {
@@ -3563,11 +3638,7 @@ func loadMockData(mw io.Writer) {
 			return
 		}
 		characterNameCacheMu.Lock()
-		characterNameCache[characterID] = struct {
-			name   string
-			errMsg string
-			expiry time.Time
-		}{name: "", errMsg: esiCharacterNameFailureMsg(characterID, ""), expiry: time.Now().Add(365 * 24 * time.Hour)}
+		characterNameCache[characterID] = characterNameCacheEntry{name: "", errMsg: esiCharacterNameFailureMsg(characterID, ""), expiry: time.Now().Add(365 * 24 * time.Hour)}
 		characterNameCacheMu.Unlock()
 	}
 

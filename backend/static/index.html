@@ -1748,9 +1748,8 @@ function bindEventHandlers() {
       const targetId = attackersToggle.getAttribute("data-target");
       const targetElement = document.getElementById(targetId);
       if (targetElement) {
-        const isCurrentlyVisible = targetElement.style.display !== 'none' &&
-                                   window.getComputedStyle(targetElement).display !== 'none';
-        attackersToggle.textContent = isCurrentlyVisible ? "(hide)" : "(show)";
+        const isCurrentlyVisible = window.getComputedStyle(targetElement).display !== 'none';
+        attackersToggle.textContent = isCurrentlyVisible ? "(show)" : "(hide)";
         slideToggle(targetElement, 200);
       }
       return;
@@ -2919,6 +2918,7 @@ function clearAllFilters() {
   if (filterNullsec) filterNullsec.checked = true;
   if (filterGatecamps) filterGatecamps.checked = false;
   setMaxAttackersLimit(-1);
+  saveFilterState();
 }
 
 // Update the filter indicator icon at the top-left corner of the table
