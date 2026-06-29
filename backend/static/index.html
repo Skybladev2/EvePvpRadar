@@ -7,6 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg" sizes="any">
     <meta name="container-tag" content="[[.ContainerTag]]">
     [[.ShipIconsStyle]]
+    [[.MilitiaIconsStyle]]
     <style>
         html {
             font-size: 16px; /* Base font size for FullHD (1920px) */
@@ -1245,6 +1246,74 @@
         .filter-indicator-tooltip-item {
             white-space: nowrap;
         }
+        /* FW mode: militia selection row */
+        #militia-selection {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin: 0.625rem 0;
+        }
+        .militia-label {
+            font-weight: 500;
+            color: #aaa;
+            margin-right: 0.25rem;
+        }
+        .militia-btn {
+            padding: 0.375rem 0.75rem;
+            border: 1px solid #555;
+            border-radius: 4px;
+            background: #2a2a2a;
+            color: #e0e0e0;
+            cursor: pointer;
+            font-size: 0.85em;
+            transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+        }
+        .militia-btn:hover {
+            background: #3a3a3a;
+            border-color: #888;
+        }
+        .militia-btn.militia-active {
+            border-color: #4CAF50;
+            color: #81C784;
+        }
+        .militia-btn.militia-enemy {
+            border-color: #f44336;
+            color: #ef9a9a;
+        }
+        .militia-btn.militia-active::after {
+            content: " ✔";
+            color: #4CAF50;
+        }
+        /* Militia icons in killmail rows */
+        .militia-icon-placeholder {
+            display: inline-block;
+            width: 22px;
+            height: 22px;
+            vertical-align: middle;
+            margin: 0 2px;
+        }
+        .militia-icon {
+            display: inline-block;
+            width: 22px;
+            height: 22px;
+            vertical-align: middle;
+            margin: 0 2px;
+            border-radius: 3px;
+            border: 1px solid #555;
+            background-size: contain;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+        .militia-icon.militia-friendly {
+            border-color: #4CAF50;
+        }
+        .militia-icon.militia-enemy {
+            border-color: #f44336;
+        }
+        /* Highsec checkbox in FW mode */
+        #militia-highsec-label {
+            margin-left: 0.5rem;
+        }
         /* Trade hub system name styling */
         #result td a.trade-hub {
             font-weight: bold;
@@ -1388,6 +1457,7 @@ const Config = {
     systemsSearch: `${apiBase}/systems/search`,
     nearTradeHubs: `${apiBase}/near_trade_hubs.html`,
     proximity: `${apiBase}/proximity.html`,
+    fwKills: `${apiBase}/fw-kills`,
     authLocation: `${apiBase}/auth/location`,
     authLogin: `${apiBase}/auth/login`,
     authLogout: `${apiBase}/auth/logout`,
@@ -1398,6 +1468,7 @@ const Config = {
 // Per-mode cache of table HTML; restored when switching back to a mode
 const modeResultsCache = {
   near_trade_hubs: null,
+  fw: null,
   proximity: null
 };
 
@@ -1508,6 +1579,10 @@ function handlePageReload() {
   // Restore checkbox and filter state
   restoreFilterState();
   
+  // Restore saved militia (default to caldari)
+  const savedMilitia = localStorage.getItem('evePvpSearchMilitia') || 'caldari';
+  updateMilitiaHighlight(savedMilitia);
+  
   // Check if we just came back from authentication
   const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('auth') === 'success') {
@@ -1601,6 +1676,20 @@ async function loadInitialData() {
   // No initial data loading needed
 }
 
+// Militia faction enemy pairs: Caldari↔Gallente, Amarr↔Minmatar, Guristas at war with both Caldari and Gallente, Angels at war with both Amarr and Minmatar
+const militiaEnemies = { "caldari": ["gallente", "guristas"], "gallente": ["caldari", "guristas"], "amarr": ["minmatar", "angels"], "minmatar": ["amarr", "angels"], "guristas": ["caldari", "gallente"], "angels": ["amarr", "minmatar"] };
+function updateMilitiaHighlight(activeShortName) {
+  document.querySelectorAll(".militia-btn").forEach(b => {
+    b.classList.remove("militia-active", "militia-enemy");
+  });
+  const active = document.querySelector(`.militia-btn[data-militia="${activeShortName}"]`);
+  if (active) active.classList.add("militia-active");
+  const enemyList = militiaEnemies[activeShortName] || [];
+  enemyList.forEach(enemyShortName => {
+    const enemy = document.querySelector(`.militia-btn[data-militia="${enemyShortName}"]`);
+    if (enemy) enemy.classList.add("militia-enemy");
+  });
+}
 
 function bindEventHandlers() {
   debugLog("CLIENT: Binding event handlers");
@@ -1816,6 +1905,31 @@ function bindEventHandlers() {
       setMaxAttackersLimit(-1);
     });
   }
+
+  // FW mode: militia button handlers
+  document.querySelectorAll(".militia-btn").forEach(btn => {
+    btn.addEventListener("click", async function() {
+      updateMilitiaHighlight(this.dataset.militia);
+      localStorage.setItem("evePvpSearchMilitia", this.dataset.militia);
+      // Refetch FW kills with new faction
+      const checkedMode = document.querySelector("input[name='mode']:checked");
+      if (checkedMode && checkedMode.value === "fw") {
+        await fetchFWKills();
+      }
+    });
+  });
+
+  // FW mode: highsec checkbox persistence
+  const militiaHighsec = document.getElementById("militia-highsec");
+  if (militiaHighsec) {
+    const saved = localStorage.getItem("evePvpSearchMilitiaHighsec");
+    militiaHighsec.checked = saved !== "false";
+    militiaHighsec.addEventListener("change", function() {
+      localStorage.setItem("evePvpSearchMilitiaHighsec", this.checked ? "true" : "false");
+      applySecurityFilters();
+    });
+  }
+
   debugLog("CLIENT: Event handlers bound");
 }
 
@@ -2042,14 +2156,34 @@ async function handleModeChange() {
 
   const jumpCloneStations = document.getElementById("jump-clone-stations");
 
+  // Show/hide FW-specific UI
+  const fwElements = document.querySelectorAll(".fw-only");
+  const militiaSelection = document.getElementById("militia-selection");
+  if (mode === "fw") {
+    fwElements.forEach(el => el.style.display = "");
+    if (militiaSelection) militiaSelection.style.display = "flex";
+    // Ensure default militia is highlighted when entering FW mode
+    const savedMilitia = localStorage.getItem('evePvpSearchMilitia') || 'caldari';
+    if (!localStorage.getItem('evePvpSearchMilitia')) {
+      localStorage.setItem('evePvpSearchMilitia', 'caldari');
+    }
+    updateMilitiaHighlight(savedMilitia);
+  } else {
+    fwElements.forEach(el => el.style.display = "none");
+    if (militiaSelection) militiaSelection.style.display = "none";
+  }
+
   // Configure controls based on mode
-  if (mode === "near_trade_hubs") {
+  if (mode === "near_trade_hubs" || mode === "fw") {
     if (jumpCloneStations) jumpCloneStations.style.display = "block"; // Show jump clone stations list in trade hubs mode
     hideLocationDisplay();
 
-    // Always fetch fresh data for near_trade_hubs mode
+    // Always fetch fresh data for trade hubs / FW mode
     if (initialLoadDone) {
-      // User switched to near_trade_hubs (e.g. from proximity); fetch so we don't show the other mode's table
+      await handleCheckClick();
+    } else if (mode === "fw") {
+      // FW mode: skip server-rendered table (it's the non-FW version) and fetch
+      ensureTableExists();
       await handleCheckClick();
     } else {
       // Initial load - check if we have server-rendered table
@@ -2060,7 +2194,7 @@ async function handleModeChange() {
         ensureTableExists();
         const resultThead = resultTable.querySelector("thead");
         if (resultThead && resultTbody) {
-          modeResultsCache.near_trade_hubs = {
+          modeResultsCache[mode] = {
             thead: resultThead.innerHTML,
             tbody: resultTbody.innerHTML
           };
@@ -2078,7 +2212,6 @@ async function handleModeChange() {
           scrollTableToTop(rc);
         });
       } else {
-        // Initial load with no server table (e.g. empty result); show container with CCP footer
         ensureTableExists();
         const rc = document.getElementById("result-container");
         if (rc) rc.style.display = "block";
@@ -2089,7 +2222,6 @@ async function handleModeChange() {
     if (jumpCloneStations) jumpCloneStations.style.display = "none"; // Hide jump clone stations list in Proximity mode
 
     // Always fetch fresh data for proximity mode
-    // Show banner immediately (no await) so the container doesn't blink after auth check
     showProximityLoginBanner("Please log in to use proximity mode with your current location.", false);
     const isAuthenticated = applyAuthFromPage();
     if (isAuthenticated) {
@@ -2097,10 +2229,8 @@ async function handleModeChange() {
       if (currentLocationData) showLocationDisplay(currentLocationData.systemName, currentLocationData.systemID);
       await handleCheckClick();
     } else {
-      // Show container with empty table + footer so footer is visible when not authenticated
       ensureTableExists();
       ensureCcpFooterExists();
-      // Clear table so we don't show near_trade_hubs data from previous mode
       const resultTable = document.getElementById("result");
       if (resultTable) {
         const thead = resultTable.querySelector("thead");
@@ -2325,6 +2455,87 @@ async function fetchNearTradeHubs() {
   }
 }
 
+async function fetchFWKills() {
+  debugLog("CLIENT: fetchFWKills called");
+  const activeBtn = document.querySelector(".militia-btn.militia-active");
+  const faction = activeBtn ? activeBtn.dataset.militia : "caldari";
+  try {
+    const url = Config.endpoints.fwKills + "?faction=" + encodeURIComponent(faction);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("Fetch failed");
+    const html = await response.text();
+
+    ensureTableExists();
+    const parser = new DOMParser();
+    let doc = parser.parseFromString(html, "text/html");
+    let newTable = doc.querySelector('table') || (doc.body && doc.body.querySelector('table'));
+
+    if (!newTable) {
+      const wrappedHtml = `<html><body>${html}</body></html>`;
+      doc = parser.parseFromString(wrappedHtml, "text/html");
+      newTable = doc.querySelector('table');
+    }
+
+    if (!newTable) {
+      console.error("CLIENT: No table found in FW kills response");
+      ensureTableExists();
+      const container = document.getElementById("result-container");
+      if (container) container.style.display = "block";
+      return;
+    }
+
+    const resultTable = document.getElementById("result");
+    if (!resultTable) return;
+    const container = document.getElementById("result-container");
+
+    const newThead = newTable.querySelector('thead');
+    const resultThead = resultTable.querySelector('thead');
+    if (newThead && resultThead) {
+      resultThead.innerHTML = newThead.innerHTML;
+    }
+
+    const newTbody = newTable.querySelector('tbody');
+    const resultTbody = resultTable.querySelector('tbody');
+    if (newTbody && resultTbody) {
+      const rowCount = newTbody.querySelectorAll('tr').length;
+      if (rowCount === 0) {
+        if (container) container.style.display = "block";
+        clearPilotOnlyFilter();
+        resultTbody.innerHTML = newTbody.innerHTML;
+        modeResultsCache.fw = null;
+      } else {
+        if (window.location.hash) {
+          history.replaceState(null, null, window.location.pathname + window.location.search);
+        }
+        if (container) container.style.display = "block";
+        clearPilotOnlyFilter();
+        resultTbody.innerHTML = newTbody.innerHTML;
+        modeResultsCache.fw = {
+          thead: resultThead ? resultThead.innerHTML : "",
+          tbody: resultTbody.innerHTML
+        };
+      }
+    } else {
+      console.error("CLIENT: No tbody found in FW kills response");
+      if (container) container.style.display = "block";
+      modeResultsCache.fw = null;
+    }
+
+    applySecurityStatusClasses();
+    initializeSorting();
+    applySecurityFilters();
+    bindWaypointButtons();
+    const isAuthenticated = applyAuthFromPage();
+    if (isAuthenticated) showSetDestinationButtons();
+    else hideSetDestinationButtons();
+  } catch (error) {
+    console.error("CLIENT: Fetch error for FW kills:", error);
+    ensureTableExists();
+    const container = document.getElementById("result-container");
+    if (container) container.style.display = "block";
+  }
+}
+
 async function fetchProximity() {
   debugLog("CLIENT: Fetching proximity systems for current character location");
   try {
@@ -2458,6 +2669,11 @@ async function handleCheckClick() {
       await fetchNearTradeHubs()
         .catch(error => {
           console.error("CLIENT: Error fetching near trade hubs:", error);
+        });
+    } else if (mode === "fw") {
+      await fetchFWKills()
+        .catch(error => {
+          console.error("CLIENT: Error fetching FW kills:", error);
         });
     } else {
       // Proximity mode - backend fetches character location from ESI and returns proximity data
@@ -2986,14 +3202,16 @@ function applySecurityFilters() {
   const filterLowsec = document.getElementById("filter-lowsec");
   const filterNullsec = document.getElementById("filter-nullsec");
   const filterGatecamps = document.getElementById("filter-gatecamps");
+  const filterHighsec = document.getElementById("militia-highsec");
   
   const showLowsec = filterLowsec ? filterLowsec.checked : true;
   const showNullsec = filterNullsec ? filterNullsec.checked : true;
+  const showHighsec = mode === "fw" ? (filterHighsec ? filterHighsec.checked : false) : true;
   const hideGatecamps = filterGatecamps ? filterGatecamps.checked : false;
-  const hasHiddenHubs = mode === "near_trade_hubs" && hiddenTradeHubs.size > 0;
+  const hasHiddenHubs = (mode === "near_trade_hubs" || mode === "fw") && hiddenTradeHubs.size > 0;
 
   // Fast path: no filters active — clear all rows and exit
-  if (showLowsec && showNullsec && !hideGatecamps && !hasHiddenHubs && maxAttackersLimit < 1 && pilotOnlyCharacterIds.size === 0) {
+  if (showLowsec && showNullsec && showHighsec && !hideGatecamps && !hasHiddenHubs && maxAttackersLimit < 1 && pilotOnlyCharacterIds.size === 0) {
     for (const row of resultTable.querySelectorAll("tbody tr.filtered-out")) {
       row.classList.remove("filtered-out");
     }
@@ -3026,8 +3244,9 @@ function applySecurityFilters() {
     row.classList.remove("filtered-out");
     let shouldHide = false;
 
-    if (row.classList.contains("system-lowsec") && !showLowsec) { hiddenByLowsec++; shouldHide = true; }
-    else if (row.classList.contains("system-nullsec") && !showNullsec) { hiddenByNullsec++; shouldHide = true; }
+    if (!showHighsec && row.classList.contains("system-highsec")) { hiddenByLowsec++; shouldHide = true; }
+    if (!shouldHide && row.classList.contains("system-lowsec") && !showLowsec) { hiddenByLowsec++; shouldHide = true; }
+    if (!shouldHide && row.classList.contains("system-nullsec") && !showNullsec) { hiddenByNullsec++; shouldHide = true; }
 
     if (!shouldHide && pilotOnlyCharacterIds.size > 0) {
       let anyMatch = false;
@@ -3529,6 +3748,10 @@ function hideSetDestinationButtons() {
                 <span>Near trade hubs</span>
             </label>
             <label>
+                <input type="radio" name="mode" value="fw">
+                <span>Near trade hubs (FW)</span>
+            </label>
+            <label>
                 <input type="radio" name="mode" value="proximity">
                 <span>In proximity</span>
             </label>
@@ -3564,13 +3787,26 @@ function hideSetDestinationButtons() {
             </span>
         </label>
         <label>
-            <input type="checkbox" id="filter-lowsec" checked>
-            <span>Lowsec</span>
-        </label>
-        <label>
             <input type="checkbox" id="filter-nullsec" checked>
             <span>Nullsec</span>
         </label>
+        <label>
+            <input type="checkbox" id="filter-lowsec" checked>
+            <span>Lowsec</span>
+        </label>
+        <label id="militia-highsec-label" class="fw-only" style="display:none">
+            <input type="checkbox" id="militia-highsec">
+            <span>Highsec</span>
+        </label>
+    </div>
+    <div id="militia-selection" class="fw-only" style="display:none">
+        <span class="militia-label">My militia:</span>
+        <button class="militia-btn" data-militia="caldari" data-faction-id="500001">Caldari</button>
+        <button class="militia-btn" data-militia="gallente" data-faction-id="500002">Gallente</button>
+        <button class="militia-btn" data-militia="amarr" data-faction-id="500003">Amarr</button>
+        <button class="militia-btn" data-militia="minmatar" data-faction-id="500004">Minmatar</button>
+        <button class="militia-btn" data-militia="guristas" data-faction-id="500010">Guristas</button>
+        <button class="militia-btn" data-militia="angels" data-faction-id="500011">Angels</button>
     </div>
     [[.InitialTableHTML]]
 </body>

@@ -188,6 +188,9 @@ func isUedamaScoutMonitoredSystem(systemName string) bool {
 }
 
 func isUedamaScoutLive() bool {
+	if mockData {
+		return false
+	}
 	uedamaScoutLiveStatusMu.Lock()
 	now := time.Now()
 	if now.Sub(uedamaScoutLiveStatusChecked) < uedamaScoutStreamStatusTTL {
@@ -322,6 +325,45 @@ func getShipIconsEmbeddedStyle() template.HTML {
 		shipIconsEmbeddedStyle = template.HTML(b.String()) // #nosec G203 -- built only from embedded PNGs
 	})
 	return shipIconsEmbeddedStyle
+}
+
+// Embedded militia faction icons: generated once from static/images/*_32.png.
+var (
+	militiaIconsEmbeddedStyle     template.HTML
+	militiaIconsEmbeddedStyleOnce sync.Once
+)
+
+func getMilitiaIconsEmbeddedStyle() template.HTML {
+	militiaIconsEmbeddedStyleOnce.Do(func() {
+		b := new(strings.Builder)
+		b.WriteString("<style>")
+		entries, err := fs.ReadDir(staticFS, "static/images")
+		if err != nil {
+			log.Printf("embedded militia icons: could not read static/images: %v", err)
+			return
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasSuffix(strings.ToLower(name), "_32.png") {
+				continue
+			}
+			data, err := staticFS.ReadFile("static/images/" + name)
+			if err != nil {
+				log.Printf("embedded militia icons: skip %s: %v", name, err)
+				continue
+			}
+			base := strings.TrimSuffix(name, "_32.png")
+			b64 := base64.StdEncoding.EncodeToString(data)
+			b.WriteString(".militia-icon.militia-icon--")
+			b.WriteString(base)
+			b.WriteString("{background-image:url(data:image/png;base64,")
+			b.WriteString(b64)
+			b.WriteString(")}\n")
+		}
+		b.WriteString("</style>\n")
+		militiaIconsEmbeddedStyle = template.HTML(b.String()) // #nosec G203 -- built only from embedded PNGs
+	})
+	return militiaIconsEmbeddedStyle
 }
 
 // Site root unique visitor tracking (IP + User-Agent) for Prometheus/Grafana.
@@ -472,6 +514,7 @@ type CachedKillmail struct {
 	KillLocation          *[3]float64    `json:"kill_location,omitempty"`            // Kill position in 3D space (x, y, z in meters) - calculated
 	MinDistanceToStargate *float64       `json:"min_distance_to_stargate,omitempty"` // Minimum distance to nearest stargate in meters
 	StargateInfo          *StargateInfo  `json:"stargate_info,omitempty"`            // Information about the nearest stargate
+	MinDistanceToStation  *float64       `json:"min_distance_to_station,omitempty"`  // Minimum distance to nearest station in meters
 }
 
 type SystemInRange struct {
@@ -673,6 +716,13 @@ var (
 	readyTablesDirty       bool
 )
 
+// FW mode: pre-rendered HTML per militia faction
+var (
+	readyFWMu       sync.RWMutex
+	readyFWKills    map[string]string // shortName -> pre-rendered HTML (caldari, gallente, etc.)
+	readyFWBuilding bool
+)
+
 // invalidateIndexHTMLCache now marks table HTML as dirty and schedules background rebuild.
 // We intentionally keep serving the previous ready HTML until the new snapshot is ready.
 func invalidateIndexHTMLCache() {
@@ -684,8 +734,19 @@ func invalidateIndexHTMLCache() {
 	}
 	readyTablesMu.Unlock()
 
+	// Also mark FW tables for rebuild
+	readyFWMu.Lock()
+	fwShouldStart := !readyFWBuilding
+	if fwShouldStart {
+		readyFWBuilding = true
+	}
+	readyFWMu.Unlock()
+
 	if shouldStart {
 		go rebuildReadyTablesHTML()
+	}
+	if fwShouldStart {
+		go rebuildFWKillsHTML()
 	}
 }
 
@@ -717,8 +778,8 @@ func rebuildReadyTablesHTML() {
 
 		characterNames, characterNameErrors := resolveCharacterNames(characterIDs) // single-attempt per character; failures render as missing
 
-		newNearTradeHubs := renderHTMLTableWithNames(result, "near_trade_hubs", characterNames, characterNameErrors)
-		newTheraCamps := renderTheraCampsHTMLWithNames(campKills, characterNames, characterNameErrors)
+		newNearTradeHubs := renderHTMLTableWithNames(result, "near_trade_hubs", characterNames, characterNameErrors, 0)
+		newTheraCamps := renderTheraCampsHTMLWithNames(campKills, characterNames, characterNameErrors, 0)
 
 		// Swap atomically. Preserve whether we became dirty while building so we can rebuild again.
 		readyTablesMu.Lock()
@@ -778,6 +839,51 @@ const (
 
 const ccpFooterHTML = `<footer id="ccp-disclaimer">EVE Online and the EVE logo are registered trademarks of CCP hf. All rights are reserved worldwide. All other trademarks are the property of their respective owners. EVE Online, the EVE logo, EVE and all associated logos and designs are the intellectual property of CCP hf. All artwork, screenshots, characters, vehicles, storylines, world facts or other recognizable features of the intellectual property relating to these trademarks are likewise the intellectual property of CCP hf. CCP hf. has granted permission to Eve PvP Radar to use EVE Online and all associated logos and designs for promotional and informational purposes on its website but does not endorse, and is not in any way affiliated with, Eve PvP Radar. CCP is in no way responsible for the content on or functioning of this website, nor can it be liable for any damage arising from the use of this website.</footer>`
 
+// Faction IDs for Faction Warfare
+const (
+	FactionCaldari  = 500001
+	FactionGallente = 500002
+	FactionAmarr    = 500003
+	FactionMinmatar = 500004
+	FactionGuristas = 500010
+	FactionAngels   = 500011
+)
+
+// MilitiaFaction represents a Faction Warfare militia
+type MilitiaFaction struct {
+	ID        int
+	Name      string
+	ShortName string
+	EnemyIDs  []int // opposing militia faction IDs
+}
+
+var militiaFactions = []MilitiaFaction{
+	{ID: FactionCaldari, Name: "Caldari", ShortName: "caldari", EnemyIDs: []int{FactionGallente, FactionGuristas}},
+	{ID: FactionGallente, Name: "Gallente", ShortName: "gallente", EnemyIDs: []int{FactionCaldari, FactionGuristas}},
+	{ID: FactionAmarr, Name: "Amarr", ShortName: "amarr", EnemyIDs: []int{FactionMinmatar, FactionAngels}},
+	{ID: FactionMinmatar, Name: "Minmatar", ShortName: "minmatar", EnemyIDs: []int{FactionAmarr, FactionAngels}},
+	{ID: FactionGuristas, Name: "Guristas", ShortName: "guristas", EnemyIDs: []int{FactionCaldari, FactionGallente}},
+	{ID: FactionAngels, Name: "Angels", ShortName: "angels", EnemyIDs: []int{FactionAmarr, FactionMinmatar}},
+}
+
+var factionByID map[int]MilitiaFaction
+var factionByShortName map[string]MilitiaFaction
+
+func initMilitiaMaps() {
+	factionByID = make(map[int]MilitiaFaction, len(militiaFactions))
+	factionByShortName = make(map[string]MilitiaFaction, len(militiaFactions))
+	for _, f := range militiaFactions {
+		factionByID[f.ID] = f
+		factionByShortName[f.ShortName] = f
+	}
+}
+
+// FW systems are cached from ESI /fw/systems/ endpoint.
+var (
+	fwSystemsMu    sync.RWMutex
+	fwSystemsByID  map[int]int       // systemID -> occupier factionID (0 = unknown)
+)
+
 // PrecalculatedSystemData stores precalculated data for a system with kills
 type PrecalculatedSystemData struct {
 	SystemID    int
@@ -806,15 +912,18 @@ type PrecalculatedData struct {
 	calculatedKillmails map[int]time.Time // killmailID -> calculation time
 	// Precalculated systems with kills: map[systemID][]CachedKillmail (fully processed killmails)
 	systemsWithKills map[int][]CachedKillmail
+	// Highsec station kills: systemID -> kills near stations in highsec (not in nearTradeHubsMode)
+	highsecStationKills map[int][]CachedKillmail
 }
 
 // copyPrecalculatedData creates a deep copy of PrecalculatedData
 func copyPrecalculatedData(src *PrecalculatedData) *PrecalculatedData {
 	dst := &PrecalculatedData{
-		normalMode:          make(map[int][]PrecalculatedSystemData),
-		nearTradeHubsMode:   make(map[string]PrecalculatedSystemData),
-		calculatedKillmails: make(map[int]time.Time),
-		systemsWithKills:    make(map[int][]CachedKillmail),
+		normalMode:           make(map[int][]PrecalculatedSystemData),
+		nearTradeHubsMode:    make(map[string]PrecalculatedSystemData),
+		calculatedKillmails:  make(map[int]time.Time),
+		systemsWithKills:     make(map[int][]CachedKillmail),
+		highsecStationKills:  make(map[int][]CachedKillmail),
 	}
 
 	// Deep copy normalMode map
@@ -838,6 +947,12 @@ func copyPrecalculatedData(src *PrecalculatedData) *PrecalculatedData {
 		copy(dst.systemsWithKills[k], v)
 	}
 
+	// Deep copy highsecStationKills map
+	for k, v := range src.highsecStationKills {
+		dst.highsecStationKills[k] = make([]CachedKillmail, len(v))
+		copy(dst.highsecStationKills[k], v)
+	}
+
 	return dst
 }
 
@@ -847,6 +962,7 @@ var precalculatedData = doublebuffer.NewDoubleBuffer(
 		nearTradeHubsMode:   make(map[string]PrecalculatedSystemData),
 		calculatedKillmails: make(map[int]time.Time),
 		systemsWithKills:    make(map[int][]CachedKillmail),
+		highsecStationKills: make(map[int][]CachedKillmail),
 	},
 	copyPrecalculatedData,
 )
@@ -1100,6 +1216,41 @@ func calculateDistance(pos1, pos2 [3]float64) float64 {
 	return math.Sqrt(dx*dx + dy*dy + dz*dz)
 }
 
+const maxStationDistance = 1000000.0 // 1000 km in meters
+
+// findNearestStationDistance finds the nearest station to a kill position and returns the distance and station name.
+func findNearestStationDistance(systemID int, killPos [3]float64) (float64, string, int) {
+	systemStationsMu.RLock()
+	ids := systemStations[systemID]
+	systemStationsMu.RUnlock()
+	if len(ids) == 0 {
+		return 0, "", 0
+	}
+
+	stationsByIDMu.RLock()
+	defer stationsByIDMu.RUnlock()
+
+	var minDist float64 = math.MaxFloat64
+	var nearestName string
+	var nearestID int
+	for _, sid := range ids {
+		s, ok := stationsByID[sid]
+		if !ok {
+			continue
+		}
+		d := calculateDistance(killPos, s.Position)
+		if d < minDist {
+			minDist = d
+			nearestName = s.Name
+			nearestID = s.StationID
+		}
+	}
+	if minDist > maxStationDistance {
+		return 0, "", 0
+	}
+	return minDist, nearestName, nearestID
+}
+
 // getStargateInfo gets stargate information from a locationID in a system
 // Returns: stargate info, error
 func getStargateInfo(systemID int, locationID int) (*StargateInfo, error) {
@@ -1222,6 +1373,9 @@ func esiCharacterNameFailureMsg(characterID int, _ string) string {
 // Respects ESI rate limits: staggered requests, limited concurrency.
 // IMPORTANT: single-attempt only (no retries). Failures are cached briefly (negative cache).
 func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
+	if mockData {
+		return nil, nil
+	}
 	seen := make(map[int]struct{})
 	var need []int
 	needEtag := make(map[int]string)
@@ -1564,6 +1718,9 @@ var (
 )
 
 func esiDo(req *http.Request) (*http.Response, error) {
+	if mockData {
+		return nil, errors.New("esi requests disabled in mock mode")
+	}
 	client := getESIClient()
 	var resp *http.Response
 	var err error
@@ -1731,6 +1888,8 @@ func logESIHeaders(resp *http.Response) {
 }
 
 func startup(mw io.Writer) {
+	initMilitiaMaps()
+
 	// Check for development mode
 	mockData = os.Getenv("MOCK_DATA") == "1" || os.Getenv("MOCK_DATA") == "true"
 	if mockData {
@@ -2358,32 +2517,41 @@ func initCache() error {
 }
 
 // isValidKillmail checks if a killmail is valid for precalculation
-// Valid means: lowsec/nullsec system (or Pochven, or Thera), within 1000km of a stargate
+// Valid means: lowsec/nullsec system (or Pochven, or Thera), within 1000km of a stargate or station.
 // Thera has no stargates, so Thera kills are valid if they have position data.
 // Includes all kills (ships, pods, structures, etc.) as they indicate enemy presence
 // Pochven is included because it makes sense in proximity mode.
-func isValidKillmail(killmail *zkillboardcache.CachedKillmail) bool {
-	// Check if system is lowsec, nullsec, Pochven, or Thera
+func isValidKillmail(killmail *zkillboardcache.CachedKillmail) (bool, bool) {
+	// Returns: isValid, isStationKill
+	// Check if system is lowsec, nullsec, Pochven, Thera, or highsec with position data
 	isThera := killmail.SolarSystemID == TheraSystemID
 	if !isLowsecOrNullsecSystem(killmail.SolarSystemID) && !isPochvenSystem(killmail.SolarSystemID) && !isThera {
-		system := getSystemById(killmail.SolarSystemID)
-		systemName := "unknown"
-		security := 0.0
-		if system.SystemID != 0 {
-			systemName = system.SystemName
-			security = system.Security
+		// Highsec (security >= 0.45) or other: valid only if near a station
+		if killmail.Victim.Position == nil {
+			system := getSystemById(killmail.SolarSystemID)
+			systemName := "unknown"
+			if system.SystemID != 0 {
+				systemName = system.SystemName
+			}
+			logging.Debugf("Killmail %d: System %s (%d) highsec has no position data, skipping", killmail.KillmailID, systemName, killmail.SolarSystemID)
+			return false, false
 		}
-		logging.Debugf("Killmail %d: System %s (%d) is not lowsec/nullsec/Pochven/Thera (security: %.2f), skipping", killmail.KillmailID, systemName, killmail.SolarSystemID, security)
-		return false
+		killPos := [3]float64{killmail.Victim.Position.X, killmail.Victim.Position.Y, killmail.Victim.Position.Z}
+		dist, _, _ := findNearestStationDistance(killmail.SolarSystemID, killPos)
+		if dist > 0 {
+			return true, true
+		}
+		logging.Debugf("Killmail %d: System is highsec but not near a station, skipping", killmail.KillmailID)
+		return false, false
 	}
 
 	// Thera has no stargates - valid if kill has position data (all space kills do)
 	if isThera {
 		if killmail.Victim.Position == nil {
 			logging.Debugf("Killmail %d: Thera kill has no position data, skipping", killmail.KillmailID)
-			return false
+			return false, false
 		}
-		return true
+		return true, false
 	}
 
 	// Check if kill is within 1000km of stargate
@@ -2441,31 +2609,27 @@ func isValidKillmail(killmail *zkillboardcache.CachedKillmail) bool {
 		killmail.ZKBInfo.ZKB.LocationID,
 		esiKillmail,
 	)
-	if err != nil {
-		system := getSystemById(killmail.SolarSystemID)
-		systemName := "unknown"
-		if system.SystemID != 0 {
-			systemName = system.SystemName
-		}
-		logging.Debugf("Killmail %d: Error getting position/distance in system %s (%d): %v, skipping", killmail.KillmailID, systemName, killmail.SolarSystemID, err)
-		return false
-	}
-	if !isWithinRange {
-		system := getSystemById(killmail.SolarSystemID)
-		systemName := "unknown"
-		if system.SystemID != 0 {
-			systemName = system.SystemName
-		}
-		logging.Debugf("Killmail %d: Kill in system %s (%d) is not within 1000km of stargate, skipping", killmail.KillmailID, systemName, killmail.SolarSystemID)
-		return false
+	if err == nil && isWithinRange {
+		return true, false
 	}
 
-	return true
+	// Not near a stargate — check station proximity for lowsec/nullsec
+	if killmail.Victim.Position == nil {
+		return false, false
+	}
+	killPos := [3]float64{killmail.Victim.Position.X, killmail.Victim.Position.Y, killmail.Victim.Position.Z}
+	dist, _, _ := findNearestStationDistance(killmail.SolarSystemID, killPos)
+	if dist > 0 {
+		return true, true
+	}
+
+	return false, false
 }
 
 // calculateDataForKillmail calculates and stores precalculated data for a valid killmail
 func calculateDataForKillmail(killmailID int, killmail *zkillboardcache.CachedKillmail) {
-	if !isValidKillmail(killmail) {
+	valid, isStation := isValidKillmail(killmail)
+	if !valid {
 		system := getSystemById(killmail.SolarSystemID)
 		systemName := "unknown"
 		if system.SystemID != 0 {
@@ -2482,7 +2646,7 @@ func calculateDataForKillmail(killmailID int, killmail *zkillboardcache.CachedKi
 		return
 	}
 
-	logging.Debugf("Precalculating data for valid killmail %d in system %s (%d)", killmailID, system.SystemName, killmail.SolarSystemID)
+	logging.Debugf("Precalculating data for valid killmail %d in system %s (%d) (station=%v)", killmailID, system.SystemName, killmail.SolarSystemID, isStation)
 
 	// Get kill position and distance
 	attackers := make([]ESIAttacker, len(killmail.Attackers))
@@ -2533,17 +2697,27 @@ func calculateDataForKillmail(killmailID int, killmail *zkillboardcache.CachedKi
 		SolarSystemID: killmail.SolarSystemID,
 	}
 
-	// Calculate kill position and distance (Thera has no stargates, use victim position only)
+	// Calculate kill position and distance
 	var killPos [3]float64
 	var minDistance *float64
 	var stargateInfo *StargateInfo
+	var minStationDist *float64
 	if killmail.SolarSystemID == TheraSystemID {
 		if killmail.Victim.Position == nil {
 			log.Printf("Error: Thera killmail %d has no position data", killmailID)
 			return
 		}
 		killPos = [3]float64{killmail.Victim.Position.X, killmail.Victim.Position.Y, killmail.Victim.Position.Z}
-		// No stargate info for Thera
+	} else if isStation {
+		// Station kill: use victim position directly, find nearest station
+		if killmail.Victim.Position == nil {
+			return
+		}
+		killPos = [3]float64{killmail.Victim.Position.X, killmail.Victim.Position.Y, killmail.Victim.Position.Z}
+		dist, _, _ := findNearestStationDistance(killmail.SolarSystemID, killPos)
+		if dist > 0 {
+			minStationDist = &dist
+		}
 	} else {
 		pos, dist, _, sgInfo, err := getKillPositionAndDistance(
 			killmail.SolarSystemID,
@@ -2606,31 +2780,46 @@ func calculateDataForKillmail(killmailID int, killmail *zkillboardcache.CachedKi
 		KillLocation:          &killPos,
 		MinDistanceToStargate: minDistance,
 		StargateInfo:          stargateInfo,
+		MinDistanceToStation:  minStationDist,
 	}
 
-	// Store in precalculated data - store both the timestamp and the fully processed killmail
-	precalculatedData.Write(func(data *PrecalculatedData) {
-		data.calculatedKillmails[killmailID] = time.Now()
-		if data.systemsWithKills == nil {
-			data.systemsWithKills = make(map[int][]CachedKillmail)
-		}
-		existingKills := len(data.systemsWithKills[killmail.SolarSystemID])
-		data.systemsWithKills[killmail.SolarSystemID] = append(data.systemsWithKills[killmail.SolarSystemID], cachedKillmail)
-		logging.Debugf("Writing killmail %d to precalculatedData: system %s (%d) now has %d kill(s) (was %d)", killmailID, system.SystemName, killmail.SolarSystemID, len(data.systemsWithKills[killmail.SolarSystemID]), existingKills)
-		logging.Debugf("Total systems in precalculatedData.systemsWithKills: %d", len(data.systemsWithKills))
-	})
+	isHighsec := !isLowsecOrNullsecSystem(killmail.SolarSystemID) && !isPochvenSystem(killmail.SolarSystemID)
 
-	// Verify the write by reading back immediately
-	readFn := precalculatedData.Read()
-	verifyData := readFn()
-	if kills, exists := verifyData.systemsWithKills[killmail.SolarSystemID]; exists {
-		logging.Debugf("Verified: System %s (%d) has %d kill(s) in precalculatedData after write", system.SystemName, killmail.SolarSystemID, len(kills))
+	if isHighsec {
+		// Highsec station kills: store separately, no trade hub precalc
+		precalculatedData.Write(func(data *PrecalculatedData) {
+			data.calculatedKillmails[killmailID] = time.Now()
+			if data.highsecStationKills == nil {
+				data.highsecStationKills = make(map[int][]CachedKillmail)
+			}
+			data.highsecStationKills[killmail.SolarSystemID] = append(data.highsecStationKills[killmail.SolarSystemID], cachedKillmail)
+		})
 	} else {
-		logging.Debugf("ERROR: System %s (%d) NOT FOUND in precalculatedData after write! Total systems: %d", system.SystemName, killmail.SolarSystemID, len(verifyData.systemsWithKills))
+		// Store in precalculated data - store both the timestamp and the fully processed killmail
+		precalculatedData.Write(func(data *PrecalculatedData) {
+			data.calculatedKillmails[killmailID] = time.Now()
+			if data.systemsWithKills == nil {
+				data.systemsWithKills = make(map[int][]CachedKillmail)
+			}
+			existingKills := len(data.systemsWithKills[killmail.SolarSystemID])
+			data.systemsWithKills[killmail.SolarSystemID] = append(data.systemsWithKills[killmail.SolarSystemID], cachedKillmail)
+			logging.Debugf("Writing killmail %d to precalculatedData: system %s (%d) now has %d kill(s) (was %d)", killmailID, system.SystemName, killmail.SolarSystemID, len(data.systemsWithKills[killmail.SolarSystemID]), existingKills)
+			logging.Debugf("Total systems in precalculatedData.systemsWithKills: %d", len(data.systemsWithKills))
+		})
+
+		// Verify the write by reading back immediately
+		readFn := precalculatedData.Read()
+		verifyData := readFn()
+		if kills, exists := verifyData.systemsWithKills[killmail.SolarSystemID]; exists {
+			logging.Debugf("Verified: System %s (%d) has %d kill(s) in precalculatedData after write", system.SystemName, killmail.SolarSystemID, len(kills))
+		} else {
+			logging.Debugf("ERROR: System %s (%d) NOT FOUND in precalculatedData after write! Total systems: %d", system.SystemName, killmail.SolarSystemID, len(verifyData.systemsWithKills))
+		}
+
+		// Precalculate Near trade hubs mode data for this system (trade hub, distance, route)
+		precalculateNearTradeHubsModeForSystem(killmail.SolarSystemID)
 	}
 
-	// Precalculate Near trade hubs mode data for this system (trade hub, distance, route)
-	precalculateNearTradeHubsModeForSystem(killmail.SolarSystemID)
 	// Invalidate after both systemsWithKills and nearTradeHubsMode are updated.
 	invalidateIndexHTMLCache()
 
@@ -3533,6 +3722,48 @@ func loadMockData(mw io.Writer) {
 		updateSystemConnection(systemID, jitaHubID)
 	}
 
+	// Highsec mock systems for FW mode (one per militia faction)
+	type highsecMock struct {
+		systemID  int
+		name      string
+		factionID int
+	}
+	highsecMocks := []highsecMock{
+		{50000001, "Mock-Highsec-Caldari", 500001},
+		{50000002, "Mock-Highsec-Gallente", 500002},
+		{50000003, "Mock-Highsec-Amarr", 500003},
+		{50000004, "Mock-Highsec-Minmatar", 500004},
+		{50000005, "Mock-Highsec-Guristas", 500010},
+		{50000006, "Mock-Highsec-Angels", 500011},
+	}
+	highsecStationBaseID := 61000000
+	for i, hm := range highsecMocks {
+		sysVar := getSystemById(hm.systemID)
+		ensureSystemExists(&sysVar, hm.systemID, hm.name, 0.5)
+		updateSystemConnection(hm.systemID, jitaHubID)
+		// Add a mock station
+		stationID := highsecStationBaseID + i
+		stationPos := [3]float64{0, 0, 0}
+		station := StationSDE{
+			StationID: stationID,
+			SystemID:  hm.systemID,
+			Name:      hm.name + " Station",
+			Position:  stationPos,
+		}
+		stationsByIDMu.Lock()
+		if stationsByID == nil {
+			stationsByID = make(map[int]StationSDE)
+		}
+		stationsByID[stationID] = station
+		stationsByIDMu.Unlock()
+		systemStationsMu.Lock()
+		if systemStations == nil {
+			systemStations = make(map[int][]int)
+		}
+		systemStations[hm.systemID] = append(systemStations[hm.systemID], stationID)
+		systemStationsMu.Unlock()
+	}
+
 	// Ensure Thera and Zarzakh systems exist in the systems list
 	theraSystem := getSystemById(TheraSystemID)
 	if theraSystem.SystemID == 0 {
@@ -3894,6 +4125,26 @@ func loadMockData(mw io.Writer) {
 		}
 	}
 
+	// Add highsec mock killmails (one per militia faction)
+	mockKillmailID := 1200000
+	for _, hm := range highsecMocks {
+		attackerCount := 4
+		for j := 0; j < 2; j++ {
+			timeOffset := time.Duration(j * 5) * time.Minute
+			mockKillmails = append(mockKillmails, struct {
+				systemID      int
+				systemName    string
+				security      float64
+				killCount     int
+				attackerCount int
+				killmailID    int
+				timeOffset    time.Duration
+				routeType     string
+			}{hm.systemID, hm.name, 0.5, 1, attackerCount, mockKillmailID, timeOffset, "stargates"})
+			mockKillmailID++
+		}
+	}
+
 	// Create mock Thera signatures with WhType information
 	// System 2: route through Thera only (use Capital class wormhole)
 	//   Route: trade hub -> Thera -> System 2
@@ -4018,17 +4269,21 @@ func loadMockData(mw io.Writer) {
 
 			// Generate attackers
 			attackers := make([]zkillboardcache.ESIAttacker, 0, kill.attackerCount+2)
-			for j := 0; j < kill.attackerCount; j++ {
-				characterID := 1000000 + j + killmailID
-				assignShipType(characterID, nil)
-				attackers = append(attackers, zkillboardcache.ESIAttacker{
-					CharacterID:    characterID,
-					CorporationID:  2000000 + j + killmailID,
-					AllianceID:     3000000 + j + killmailID,
-					SecurityStatus: -2.0 + float64(j)*0.1,
-					DamageDone:     1000 + j*100,
-					FinalBlow:      j == 0,
-					WeaponTypeID:   2456, // Standard weapon
+		// Faction IDs for mock attackers so militia icons are visible
+		mockFactionIDs := []int{500001, 500002, 500003, 500004, 500010, 500011}
+		for j := 0; j < kill.attackerCount; j++ {
+			characterID := 1000000 + j + killmailID
+			assignShipType(characterID, nil)
+			factionID := mockFactionIDs[(killmailID+j)%len(mockFactionIDs)]
+			attackers = append(attackers, zkillboardcache.ESIAttacker{
+				CharacterID:    characterID,
+				CorporationID:  2000000 + j + killmailID,
+				AllianceID:     3000000 + j + killmailID,
+				FactionID:      factionID,
+				SecurityStatus: -2.0 + float64(j)*0.1,
+				DamageDone:     1000 + j*100,
+				FinalBlow:      j == 0,
+				WeaponTypeID:   2456, // Standard weapon
 					ShipTypeID:     characterIDToShipTypeID[characterID],
 				})
 				if killmailID%2 == 0 && j == 0 {
@@ -4354,6 +4609,7 @@ func loadMockData(mw io.Writer) {
 	systemCount := 0
 	lowsecCount := 0
 	nullsecCount := 0
+	highsecCount := 0
 	systemDetails := make(map[int]string)
 	for systemID, kills := range systemKills {
 		totalKills += len(kills)
@@ -4368,11 +4624,14 @@ func loadMockData(mw io.Writer) {
 					lowsecCount++
 					systemDetails[systemID] = fmt.Sprintf("lowsec: %s (%.2f)", system.SystemName, system.Security)
 				}
+			} else {
+				highsecCount++
+				systemDetails[systemID] = fmt.Sprintf("highsec: %s (%.2f)", system.SystemName, system.Security)
 			}
 		}
 	}
-	fmt.Fprintf(mw, "Loaded %d mock killmails across %d systems (%d nullsec, %d lowsec)\n",
-		totalKills, systemCount, nullsecCount, lowsecCount)
+	fmt.Fprintf(mw, "Loaded %d mock killmails across %d systems (%d nullsec, %d lowsec, %d highsec)\n",
+		totalKills, systemCount, nullsecCount, lowsecCount, highsecCount)
 
 	// Log system details
 	fmt.Fprintf(mw, "System details:\n")
@@ -4716,12 +4975,9 @@ func getNearTradeHubsResult() []SystemInRange {
 
 // renderHTMLTable renders the systems table as HTML without resolving character names.
 // (Used for contexts where we don't want to block on name lookups.)
-func renderHTMLTable(systems []SystemInRange, mode string) string {
-	return renderHTMLTableWithNames(systems, mode, nil, nil)
-}
-
 // renderHTMLTableWithNames renders the systems table as HTML, using pre-resolved character names.
-func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNames map[int]string, characterNameErrors map[int]string) string {
+// selectedFactionID: 0 = no militia highlighting, otherwise militia faction ID for FW mode.
+func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNames map[int]string, characterNameErrors map[int]string, selectedFactionID int) string {
 	var html strings.Builder
 	html.WriteString("<table id='result'><thead><tr>")
 	showUedamaScoutIcon := isUedamaScoutLive()
@@ -5141,7 +5397,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 				html.WriteString(" data-attacker-count='")
 				html.WriteString(strconv.Itoa(len(kill.Attackers)))
 				html.WriteString("'>")
-				renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult)
+				renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, selectedFactionID)
 				html.WriteString("</div>")
 			}
 			if len(system.RecentKills) > 3 {
@@ -5170,7 +5426,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 					html.WriteString("' data-attacker-count='")
 					html.WriteString(strconv.Itoa(len(kill.Attackers)))
 					html.WriteString("'>")
-					renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult)
+					renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, selectedFactionID)
 					html.WriteString("</div>")
 				}
 				html.WriteString("</details>")
@@ -5192,7 +5448,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 }
 
 // renderTheraCampsHTML renders the "Possible camps in Thera" section
-func renderTheraCampsHTMLWithNames(campKills []CachedKillmail, characterNames map[int]string, characterNameErrors map[int]string) string {
+func renderTheraCampsHTMLWithNames(campKills []CachedKillmail, characterNames map[int]string, characterNameErrors map[int]string, selectedFactionID int) string {
 	if types == nil {
 		return ""
 	}
@@ -5217,7 +5473,7 @@ func renderTheraCampsHTMLWithNames(campKills []CachedKillmail, characterNames ma
 		html.WriteString(strconv.Itoa(i))
 		html.WriteString("'>")
 		// Thera camps are rendered independently; we don't compute multi-system highlights here.
-		renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, nil, nil)
+		renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, nil, nil, selectedFactionID)
 		html.WriteString("</div>")
 	}
 	html.WriteString("</div></div></div>")
@@ -5241,6 +5497,238 @@ func hasOnlyNPCs(kill *CachedKillmail) bool {
 
 	// All attackers are NPCs
 	return true
+}
+
+// isMilitiaFaction returns true if the faction ID is one of the 6 FW militias
+func isMilitiaFaction(factionID int) bool {
+	_, ok := factionByID[factionID]
+	return ok
+}
+
+// entityMilitiaHTML returns the militia icon HTML for an entity with the given faction ID, or placeholder if not a militia faction or not in FW mode.
+// selectedFactionID 0 means no militia mode — return placeholder regardless.
+func entityMilitiaHTML(factionID, selectedFactionID int) string {
+	if selectedFactionID == 0 {
+		return "<span class='militia-icon-placeholder'></span>"
+	}
+	f, ok := factionByID[factionID]
+	if !ok {
+		return "<span class='militia-icon-placeholder'></span>"
+	}
+	cssClass := "militia-icon"
+	if f.ID == selectedFactionID {
+		cssClass += " militia-friendly"
+	} else if sf, ok := factionByID[selectedFactionID]; ok {
+		for _, eid := range sf.EnemyIDs {
+			if eid == f.ID {
+				cssClass += " militia-enemy"
+				break
+			}
+		}
+	}
+	return fmt.Sprintf("<span class='%s militia-icon--%s' title='%s militia'></span>", cssClass, f.ShortName, f.Name)
+}
+
+// fetchFWSystems fetches FW system data from ESI and updates the cache
+func fetchFWSystems() {
+	if mockData {
+		return
+	}
+	log.Printf("FW systems: fetching from ESI")
+	req, err := http.NewRequest("GET", "https://esi.evetech.net/latest/fw/systems/?datasource=tranquility", nil)
+	if err != nil {
+		log.Printf("FW systems: failed to create request: %v", err)
+		return
+	}
+	setUserAgent(req)
+	resp, err := esiDo(req)
+	if err != nil {
+		log.Printf("FW systems: ESI request failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("FW systems: ESI returned %d", resp.StatusCode)
+		return
+	}
+	var fwData []struct {
+		SystemID    int `json:"solar_system_id"`
+		OccupierID  int `json:"occupier_faction_id"`
+		OwnerID     int `json:"owner_faction_id"`
+		VictoryPoints int `json:"victory_points"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&fwData); err != nil {
+		log.Printf("FW systems: failed to decode: %v", err)
+		return
+	}
+	fwSystemsMu.Lock()
+	defer fwSystemsMu.Unlock()
+	fwSystemsByID = make(map[int]int, len(fwData))
+	for _, s := range fwData {
+		fwSystemsByID[s.SystemID] = s.OccupierID
+	}
+	log.Printf("FW systems: %d systems fetched", len(fwData))
+}
+
+// renderFWHTML builds pre-rendered HTML for FW mode with the given faction.
+func renderFWHTML(factionID int) string {
+	result := getNearTradeHubsResult()
+	if len(result) == 0 {
+		return "<div id=\"result-container\">" + ccpFooterHTML + "</div>"
+	}
+
+	// Merge highsec station kills
+	readFn := precalculatedData.Read()
+	data := readFn()
+	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	if data.highsecStationKills != nil {
+		resultByID := make(map[int]*SystemInRange, len(result))
+		for i := range result {
+			resultByID[result[i].SystemID] = &result[i]
+		}
+		for systemID, kills := range data.highsecStationKills {
+			if kills == nil || (systemID >= 31000000 && systemID <= 31999999) {
+				continue
+			}
+			var filtered []CachedKillmail
+			for _, kill := range kills {
+				if hasOnlyNPCs(&kill) {
+					continue
+				}
+				killTime, err := time.Parse("2006-01-02T15:04:05Z", kill.KillmailTime)
+				if err != nil {
+					continue
+				}
+				if killTime.After(oneHourAgo) {
+					filtered = append(filtered, kill)
+				}
+			}
+			if len(filtered) == 0 {
+				continue
+			}
+			if existing, ok := resultByID[systemID]; ok {
+				existing.RecentKills = append(existing.RecentKills, filtered...)
+				sort.Slice(existing.RecentKills, func(i, j int) bool {
+					ti, _ := time.Parse("2006-01-02T15:04:05Z", existing.RecentKills[i].KillmailTime)
+					tj, _ := time.Parse("2006-01-02T15:04:05Z", existing.RecentKills[j].KillmailTime)
+					return ti.After(tj)
+				})
+			} else {
+				sys := getSystemById(systemID)
+				if sys.SystemID == 0 {
+					continue
+				}
+				result = append(result, SystemInRange{
+					SystemID:    systemID,
+					Name:        sys.SystemName,
+					Dist:        0,
+					Security:    sys.Security,
+					RecentKills: filtered,
+					Weight:      float64(nearTradeHubsMaxDisplayJumps + 1000),
+				})
+			}
+		}
+	}
+
+	var characterIDs []int
+	for _, system := range result {
+		for i := 0; i < 3 && i < len(system.RecentKills); i++ {
+			for _, a := range system.RecentKills[i].Attackers {
+				if a.CharacterID != 0 {
+					characterIDs = append(characterIDs, a.CharacterID)
+				}
+			}
+		}
+	}
+	characterNames, characterNameErrors := resolveCharacterNames(characterIDs)
+
+	html := renderHTMLTableWithNames(result, "near_trade_hubs", characterNames, characterNameErrors, factionID)
+	return "<div id=\"result-container\">" + html + ccpFooterHTML + "</div>"
+}
+
+// rebuildFWKillsHTML builds pre-rendered HTML for all 6 factions in parallel.
+func rebuildFWKillsHTML() {
+	newFW := make(map[string]string, len(militiaFactions))
+	type result struct {
+		shortName string
+		html      string
+	}
+	ch := make(chan result, len(militiaFactions))
+	for _, f := range militiaFactions {
+		f := f
+		go func() {
+			h := renderFWHTML(f.ID)
+			ch <- result{shortName: f.ShortName, html: h}
+		}()
+	}
+	for range militiaFactions {
+		r := <-ch
+		newFW[r.shortName] = r.html
+	}
+	readyFWMu.Lock()
+	readyFWKills = newFW
+	readyFWBuilding = false
+	readyFWMu.Unlock()
+	log.Printf("FW kills: rebuilt for %d factions", len(newFW))
+}
+
+// getCharacterMilitiaFaction returns the faction ID for a character's militia, or 0 if not in a militia.
+// Uses ESI: GET /characters/{id}/ -> corporation_id -> GET /corporations/{id}/ -> faction_id
+func getCharacterMilitiaFaction(characterID int, accessToken string) int {
+	if characterID == 0 {
+		return 0
+	}
+	// Get character info
+	charURL := fmt.Sprintf("https://esi.evetech.net/latest/characters/%d/?datasource=tranquility", characterID)
+	req, err := http.NewRequest("GET", charURL, nil)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	setUserAgent(req)
+	resp, err := esiDo(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return 0
+	}
+	var charData struct {
+		CorporationID int `json:"corporation_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&charData); err != nil {
+		resp.Body.Close()
+		return 0
+	}
+	resp.Body.Close()
+
+	// Get corporation info
+	corpURL := fmt.Sprintf("https://esi.evetech.net/latest/corporations/%d/?datasource=tranquility", charData.CorporationID)
+	req2, err := http.NewRequest("GET", corpURL, nil)
+	if err != nil {
+		return 0
+	}
+	setUserAgent(req2)
+	resp2, err := esiDo(req2)
+	if err != nil || resp2.StatusCode != http.StatusOK {
+		if resp2 != nil {
+			resp2.Body.Close()
+		}
+		return 0
+	}
+	var corpData struct {
+		FactionID int `json:"faction_id"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&corpData); err != nil {
+		resp2.Body.Close()
+		return 0
+	}
+	resp2.Body.Close()
+
+	if isMilitiaFaction(corpData.FactionID) {
+		return corpData.FactionID
+	}
+	return 0
 }
 
 // zkillAsearchPilotLossesInShipURL is zKill advanced search: losses where this pilot died in this ship type.
@@ -5274,6 +5762,7 @@ func zkillAsearchPilotLossesInShipURL(characterID, shipTypeID int) string {
 }
 
 // renderKillmailHTML renders a single killmail as HTML
+// selectedFactionID: 0 = no militia highlighting, otherwise one of FactionCaldari etc.
 func renderKillmailHTML(
 	html *strings.Builder,
 	kill *CachedKillmail,
@@ -5282,6 +5771,7 @@ func renderKillmailHTML(
 	characterNameErrors map[int]string,
 	pilotMultiSystem map[int]bool,
 	systemsInResult map[int]bool,
+	selectedFactionID int,
 ) {
 	// Grey monochrome pilot icons (SVG keeps them consistent across OS/font rendering).
 	// Running human icon from static/running-human.svg (repeat pilots across multiple systems).
@@ -5387,6 +5877,20 @@ func renderKillmailHTML(
 		}
 		html.WriteString(")")
 	}
+	// Display station info if available
+	if kill.MinDistanceToStation != nil {
+		html.WriteString(" (")
+		html.WriteString("<span class=\"stargate-system-name\">") // reuse stargate CSS
+		html.WriteString("Station")
+		html.WriteString("</span> at ")
+		distanceKm := *kill.MinDistanceToStation / 1000.0
+		if distanceKm < 1.0 {
+			html.WriteString(fmt.Sprintf("%.0f m", *kill.MinDistanceToStation))
+		} else {
+			html.WriteString(fmt.Sprintf("%.1f km", distanceKm))
+		}
+		html.WriteString(")")
+	}
 
 	attackerCount := len(kill.Attackers)
 	html.WriteString("<span class='attackers-section'>Attackers: ")
@@ -5438,6 +5942,7 @@ func renderKillmailHTML(
 					zkbLossesURL = "https://zkillboard.com/character/" + strconv.Itoa(pilotID) + "/losses/"
 				}
 
+				html.WriteString(entityMilitiaHTML(attacker.FactionID, selectedFactionID))
 				// Ship type icon stays wiki-linked (with ship tooltip).
 				writeShipTypeIconWithWikiHTML(html, iconHTML, attackerShip, attackerIsNPC)
 
@@ -5469,6 +5974,7 @@ func renderKillmailHTML(
 					html.WriteString("</a>")
 				}
 			} else {
+				html.WriteString(entityMilitiaHTML(attacker.FactionID, selectedFactionID))
 				writeAttackerShipTypeHTML(html, iconHTML, attackerShip, attackerIsNPC)
 			}
 			html.WriteString(" with ")
@@ -5500,7 +6006,6 @@ func renderKillmailHTML(
 			if s := shipTypeIconHTMLFromGroup(attackerGroup, attackerIsNPC); s != "" {
 				iconHTML = s
 			}
-
 			if characterNames != nil && attacker.CharacterID != 0 {
 				name := characterNames[attacker.CharacterID]
 				pilotID := attacker.CharacterID
@@ -5512,6 +6017,7 @@ func renderKillmailHTML(
 					zkbLossesURL = "https://zkillboard.com/character/" + strconv.Itoa(pilotID) + "/losses/"
 				}
 
+				html.WriteString(entityMilitiaHTML(attacker.FactionID, selectedFactionID))
 				// Ship type icon stays wiki-linked (with ship tooltip).
 				writeShipTypeIconWithWikiHTML(html, iconHTML, attackerShip, attackerIsNPC)
 
@@ -5525,6 +6031,7 @@ func renderKillmailHTML(
 					html.WriteString("'>")
 					writeShipTypeTextHTML(html, attackerShip)
 					html.WriteString("</a>")
+
 					// Running-man icon is also the pilot-only filter toggle.
 					html.WriteString("<span class='pilot-icon-wrap pilot-hide-systems-btn' data-character-id='")
 					html.WriteString(strconv.Itoa(pilotID))
@@ -5542,6 +6049,7 @@ func renderKillmailHTML(
 					html.WriteString("</a>")
 				}
 			} else {
+				html.WriteString(entityMilitiaHTML(attacker.FactionID, selectedFactionID))
 				writeAttackerShipTypeHTML(html, iconHTML, attackerShip, attackerIsNPC)
 			}
 			html.WriteString(" with ")
@@ -5643,6 +6151,44 @@ func getSystemsWithPrecalculatedKills() map[int][]CachedKillmail {
 	}
 
 	logging.Debugf("getSystemsWithPrecalculatedKills: Completed, returning %d systems", len(result))
+
+	// Also merge highsec station kills
+	if data.highsecStationKills != nil {
+		for systemID, kills := range data.highsecStationKills {
+			if kills == nil {
+				continue
+			}
+			if systemID >= 31000000 && systemID <= 31999999 {
+				continue
+			}
+			var filtered []CachedKillmail
+			for _, kill := range kills {
+				if hasOnlyNPCs(&kill) {
+					continue
+				}
+				killTime, err := time.Parse("2006-01-02T15:04:05Z", kill.KillmailTime)
+				if err != nil {
+					continue
+				}
+				if killTime.After(oneHourAgo) {
+					filtered = append(filtered, kill)
+				}
+			}
+			if len(filtered) > 0 {
+				// Merge with existing stargate kills for this system
+				existing := result[systemID]
+				merged := append(existing, filtered...)
+				sort.Slice(merged, func(i, j int) bool {
+					timeI, _ := time.Parse("2006-01-02T15:04:05Z", merged[i].KillmailTime)
+					timeJ, _ := time.Parse("2006-01-02T15:04:05Z", merged[j].KillmailTime)
+					return timeI.After(timeJ)
+				})
+				result[systemID] = merged
+			}
+		}
+	}
+
+	logging.Debugf("getSystemsWithPrecalculatedKills: Returning %d systems after highsec merge", len(result))
 	return result
 }
 
@@ -6361,10 +6907,16 @@ func proximityHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	characterNames, characterNameErrors := resolveCharacterNames(characterIDs)
 
+	// Determine character's militia faction for FW enrichment in proximity mode
+	var selectedFaction int
+	if session != nil {
+		selectedFaction = getCharacterMilitiaFaction(session.CharacterID, session.AccessToken)
+	}
+
 	// Prepend meta div with start system for frontend to display location; escape system name for HTML safety
 	meta := fmt.Sprintf(`<div id="proximity-meta" data-system-id="%d" data-system-name="%s" style="display:none"></div>`,
 		systemID, html.EscapeString(systemName))
-	html := meta + renderHTMLTableWithNames(result, "proximity", characterNames, characterNameErrors)
+	html := meta + renderHTMLTableWithNames(result, "proximity", characterNames, characterNameErrors, selectedFaction)
 	_, _ = w.Write([]byte(html))
 }
 
@@ -6602,6 +7154,17 @@ func main() {
 		log.Println("Mock data loaded successfully")
 	}
 
+	// Initial FW system data fetch and pre-rendering
+	fetchFWSystems()
+	if mockData {
+		rebuildFWKillsHTML()
+	} else {
+		go func() {
+			time.Sleep(5 * time.Second)
+			rebuildFWKillsHTML()
+		}()
+	}
+
 	// Start metrics server before R2Z2 so Prometheus can scrape counter=0; then a short delay
 	// so the first scrape sees 0 and increase(...[1m]) includes backfill requests when they run.
 	port := os.Getenv("PORT")
@@ -6746,6 +7309,29 @@ func main() {
 		}
 	}))
 
+	// FW mode: serve pre-rendered HTML per militia faction
+	http.HandleFunc("/api/fw-kills", gzipHandler(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Content-Type", "text/html")
+		faction := r.URL.Query().Get("faction")
+		if faction == "" {
+			faction = "caldari"
+		}
+		readyFWMu.RLock()
+		html := ""
+		if readyFWKills != nil {
+			html = readyFWKills[faction]
+		}
+		readyFWMu.RUnlock()
+		if html == "" {
+			invalidateIndexHTMLCache()
+			html = "<div>Loading…</div>"
+		}
+		if _, err := w.Write([]byte(html)); err != nil {
+			log.Printf("Error writing FW kills response: %v", err)
+		}
+	}))
+
 	fmt.Fprintln(mw, "Startup time: ", time.Since(startTime))
 	fmt.Fprintf(mw, "Server is listening on port %s (metrics on %s)...\n", port, metricsPort)      // #nosec G705 -- log output, not HTML
 	fmt.Fprintf(logFile, "Server is listening on port %s (metrics on %s)...\n", port, metricsPort) // #nosec G705 -- log file, not HTML
@@ -6877,7 +7463,8 @@ func main() {
 				"PilotRunningIconHTML":    template.HTML(pilotIconRunningHTML),
 				"PilotStandingIconHTML":   template.HTML(pilotIconStandingHTML),
 				"FilterIconHTML":          template.HTML(filterIconHTML),
-				"ShipIconsStyle":          getShipIconsEmbeddedStyle(),
+			"ShipIconsStyle":          getShipIconsEmbeddedStyle(),
+			"MilitiaIconsStyle":       getMilitiaIconsEmbeddedStyle(),
 			"LoginImageLargeDataURI":  loginImageLargeDataURI,
 			"LoginImageSmallDataURI":  loginImageSmallDataURI,
 				"DonateURL":               donateURL,
@@ -6975,6 +7562,7 @@ func main() {
 			"PilotStandingIconHTML":   template.HTML(pilotIconStandingHTML),
 			"FilterIconHTML":          template.HTML(filterIconHTML),
 			"ShipIconsStyle":          getShipIconsEmbeddedStyle(),
+			"MilitiaIconsStyle":       getMilitiaIconsEmbeddedStyle(),
 			"LoginImageLargeDataURI":  loginImageLargeDataURI,
 			"LoginImageSmallDataURI":  loginImageSmallDataURI,
 			"DonateURL":               donateURL,
