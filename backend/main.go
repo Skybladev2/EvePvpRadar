@@ -3118,30 +3118,7 @@ func euniWikiShipPageURL(shipTypeName string) string {
 	return "https://wiki.eveuniversity.org/" + url.PathEscape(title)
 }
 
-// writeAttackerShipTypeHTML writes the ship icon (or bullet), optionally wrapped in an EVE University wiki link for the ship type.
-// NPC attackers (CharacterID 0) are never linked — wiki pages are for capsuleer ships.
-func writeAttackerShipTypeHTML(html *strings.Builder, iconHTML, attackerShip string, isNPC bool) {
-	var wikiURL string
-	if !isNPC {
-		wikiURL = euniWikiShipPageURL(attackerShip)
-	}
-	if wikiURL != "" {
-		html.WriteString("<a target='_blank' rel='noopener noreferrer' href='")
-		html.WriteString(template.HTMLEscapeString(wikiURL))
-		html.WriteString("'>")
-	}
-	if iconHTML != "" {
-		html.WriteString(iconHTML)
-	} else {
-		html.WriteString("• ")
-	}
-	html.WriteString("<span><span class='ship-type-text'>")
-	html.WriteString(template.HTMLEscapeString(attackerShip))
-	html.WriteString("</span></span>")
-	if wikiURL != "" {
-		html.WriteString("</a>")
-	}
-}
+
 
 // isTheraCampKill returns true if the kill indicates a possible camp in Thera:
 // - Kill in Thera, not at station
@@ -6079,6 +6056,87 @@ func renderKillmailHTML(
 	attackerCount := len(kill.Attackers)
 	html.WriteString("<span class='attackers-section'>Attackers: ")
 
+	renderAttackerRow := func(attacker ESIAttacker) {
+		attackerShip := types[attacker.ShipTypeID]
+		if attackerShip == "" {
+			attackerShip = "Unknown ship"
+		}
+		attackerGroup := typeIDToGroupName[attacker.ShipTypeID]
+		weapon := types[attacker.WeaponTypeID]
+		if weapon == "" {
+			weapon = "Unknown weapon"
+		}
+		attackerIsNPC := attacker.CharacterID == 0
+		var iconHTML string
+		if s := shipTypeIconHTMLFromGroup(attackerGroup, attackerIsNPC); s != "" {
+			iconHTML = s
+		}
+
+		html.WriteString("<tr>")
+		// Faction icon column
+		html.WriteString("<td class='attacker-faction'>")
+		html.WriteString(entityMilitiaHTML(attacker.FactionID, selectedFactionID))
+		html.WriteString("</td>")
+
+		// Ship icon column
+		html.WriteString("<td class='attacker-ship'>")
+		if characterNames != nil && attacker.CharacterID != 0 {
+			writeShipTypeIconWithWikiHTML(html, iconHTML, attackerShip, attackerIsNPC)
+		} else {
+			if iconHTML != "" {
+				html.WriteString(iconHTML)
+			} else {
+				html.WriteString("• ")
+			}
+		}
+		html.WriteString("</td>")
+
+		// Description column: pilot link (or ship name) + weapon
+		html.WriteString("<td class='attacker-desc'>")
+		if characterNames != nil && attacker.CharacterID != 0 {
+			name := characterNames[attacker.CharacterID]
+			pilotID := attacker.CharacterID
+			meta := pilotLinkMetaFor(pilotID, name, characterNameErrors)
+			var zkbLossesURL string
+			if attacker.ShipTypeID != 0 {
+				zkbLossesURL = zkillAsearchPilotLossesInShipURL(pilotID, attacker.ShipTypeID)
+			} else {
+				zkbLossesURL = "https://zkillboard.com/character/" + strconv.Itoa(pilotID) + "/losses/"
+			}
+
+			if pilotMultiSystem != nil && pilotMultiSystem[pilotID] {
+				html.WriteString("<span class='pilot-multi-system'>")
+				html.WriteString("<a target='_blank' rel='noopener noreferrer' class='pilot-link' href='")
+				html.WriteString(zkbLossesURL)
+				writePilotLinkAttrs(html, meta, pilotID)
+				html.WriteString("'>")
+				writeShipTypeTextHTML(html, attackerShip)
+				html.WriteString("</a>")
+				html.WriteString("<span class='pilot-icon-wrap pilot-hide-systems-btn' data-character-id='")
+				html.WriteString(strconv.Itoa(pilotID))
+				html.WriteString("' aria-pressed='false' title='Show only systems where this pilot appears' aria-label='Show only systems where this pilot appears as an attacker' role='button' tabindex='0'>")
+				html.WriteString(pilotIconRunningHTML)
+				html.WriteString("</span>")
+				html.WriteString("</span>")
+			} else {
+				html.WriteString("<a target='_blank' rel='noopener noreferrer' class='pilot-link' href='")
+				html.WriteString(zkbLossesURL)
+				writePilotLinkAttrs(html, meta, pilotID)
+				html.WriteString("'>")
+				writeShipTypeTextHTML(html, attackerShip)
+				html.WriteString("</a>")
+			}
+		} else {
+			html.WriteString("<span class='ship-type-text'>")
+			html.WriteString(template.HTMLEscapeString(attackerShip))
+			html.WriteString("</span>")
+		}
+		html.WriteString(" with ")
+		html.WriteString(template.HTMLEscapeString(weapon))
+		html.WriteString("</td>")
+		html.WriteString("</tr>")
+	}
+
 	// Collapse attackers list if there are more than 5
 	if attackerCount > 5 {
 		html.WriteString(strconv.Itoa(attackerCount))
@@ -6095,151 +6153,20 @@ func renderKillmailHTML(
 		html.WriteString("<div class='attackers-list' id='")
 		html.WriteString(uniqueID)
 		html.WriteString("'>")
-
-		for i, attacker := range kill.Attackers {
-			if i > 0 {
-				html.WriteString("<br/>")
-			}
-			attackerShip := types[attacker.ShipTypeID]
-			if attackerShip == "" {
-				attackerShip = "Unknown ship"
-			}
-			attackerGroup := typeIDToGroupName[attacker.ShipTypeID]
-			weapon := types[attacker.WeaponTypeID]
-			if weapon == "" {
-				weapon = "Unknown weapon"
-			}
-			attackerIsNPC := attacker.CharacterID == 0
-			// Attackers list: show icon instead of item dots (when we can map it).
-			var iconHTML string
-			if s := shipTypeIconHTMLFromGroup(attackerGroup, attackerIsNPC); s != "" {
-				iconHTML = s
-			}
-
-			if characterNames != nil && attacker.CharacterID != 0 {
-				name := characterNames[attacker.CharacterID]
-				pilotID := attacker.CharacterID
-				meta := pilotLinkMetaFor(pilotID, name, characterNameErrors)
-				var zkbLossesURL string
-				if attacker.ShipTypeID != 0 {
-					zkbLossesURL = zkillAsearchPilotLossesInShipURL(pilotID, attacker.ShipTypeID)
-				} else {
-					zkbLossesURL = "https://zkillboard.com/character/" + strconv.Itoa(pilotID) + "/losses/"
-				}
-
-				html.WriteString(entityMilitiaHTML(attacker.FactionID, selectedFactionID))
-				// Ship type icon stays wiki-linked (with ship tooltip).
-				writeShipTypeIconWithWikiHTML(html, iconHTML, attackerShip, attackerIsNPC)
-
-				if pilotMultiSystem != nil && pilotMultiSystem[pilotID] {
-					html.WriteString("<span class='pilot-multi-system'>")
-					// Repeat offenders across multiple systems: ship type text links to pilot losses,
-					// with a "running" human icon and filter button next to it.
-					html.WriteString("<a target='_blank' rel='noopener noreferrer' class='pilot-link' href='")
-					html.WriteString(zkbLossesURL)
-					writePilotLinkAttrs(html, meta, pilotID)
-					html.WriteString("'>")
-					writeShipTypeTextHTML(html, attackerShip)
-					html.WriteString("</a>")
-
-					// Running-man icon is also the pilot-only filter toggle.
-					html.WriteString("<span class='pilot-icon-wrap pilot-hide-systems-btn' data-character-id='")
-					html.WriteString(strconv.Itoa(pilotID))
-					html.WriteString("' aria-pressed='false' title='Show only systems where this pilot appears' aria-label='Show only systems where this pilot appears as an attacker' role='button' tabindex='0'>")
-					html.WriteString(pilotIconRunningHTML)
-					html.WriteString("</span>")
-					html.WriteString("</span>")
-				} else {
-					// Normal case: ship type text links to pilot losses.
-					html.WriteString("<a target='_blank' rel='noopener noreferrer' class='pilot-link' href='")
-					html.WriteString(zkbLossesURL)
-					writePilotLinkAttrs(html, meta, pilotID)
-					html.WriteString("'>")
-					writeShipTypeTextHTML(html, attackerShip)
-					html.WriteString("</a>")
-				}
-			} else {
-				html.WriteString(entityMilitiaHTML(attacker.FactionID, selectedFactionID))
-				writeAttackerShipTypeHTML(html, iconHTML, attackerShip, attackerIsNPC)
-			}
-			html.WriteString(" with ")
-			html.WriteString(template.HTMLEscapeString(weapon))
+		html.WriteString("<table class='attackers-table'>")
+		for _, attacker := range kill.Attackers {
+			renderAttackerRow(attacker)
 		}
-
+		html.WriteString("</table>")
 		html.WriteString("</div>")
 	} else {
 		// Show all attackers normally
 		html.WriteString(strconv.Itoa(attackerCount))
-		html.WriteString("<br/>")
-
-		for i, attacker := range kill.Attackers {
-			if i > 0 {
-				html.WriteString("<br/>")
-			}
-			attackerShip := types[attacker.ShipTypeID]
-			if attackerShip == "" {
-				attackerShip = "Unknown ship"
-			}
-			attackerGroup := typeIDToGroupName[attacker.ShipTypeID]
-			weapon := types[attacker.WeaponTypeID]
-			if weapon == "" {
-				weapon = "Unknown weapon"
-			}
-			attackerIsNPC := attacker.CharacterID == 0
-			// Attackers list: show icon instead of item dots (when we can map it).
-			var iconHTML string
-			if s := shipTypeIconHTMLFromGroup(attackerGroup, attackerIsNPC); s != "" {
-				iconHTML = s
-			}
-			if characterNames != nil && attacker.CharacterID != 0 {
-				name := characterNames[attacker.CharacterID]
-				pilotID := attacker.CharacterID
-				meta := pilotLinkMetaFor(pilotID, name, characterNameErrors)
-				var zkbLossesURL string
-				if attacker.ShipTypeID != 0 {
-					zkbLossesURL = zkillAsearchPilotLossesInShipURL(pilotID, attacker.ShipTypeID)
-				} else {
-					zkbLossesURL = "https://zkillboard.com/character/" + strconv.Itoa(pilotID) + "/losses/"
-				}
-
-				html.WriteString(entityMilitiaHTML(attacker.FactionID, selectedFactionID))
-				// Ship type icon stays wiki-linked (with ship tooltip).
-				writeShipTypeIconWithWikiHTML(html, iconHTML, attackerShip, attackerIsNPC)
-
-				if pilotMultiSystem != nil && pilotMultiSystem[pilotID] {
-					html.WriteString("<span class='pilot-multi-system'>")
-					// Repeat offenders across multiple systems: ship type text links to pilot losses,
-					// with a "running" human icon and filter button next to it.
-					html.WriteString("<a target='_blank' rel='noopener noreferrer' class='pilot-link' href='")
-					html.WriteString(zkbLossesURL)
-					writePilotLinkAttrs(html, meta, pilotID)
-					html.WriteString("'>")
-					writeShipTypeTextHTML(html, attackerShip)
-					html.WriteString("</a>")
-
-					// Running-man icon is also the pilot-only filter toggle.
-					html.WriteString("<span class='pilot-icon-wrap pilot-hide-systems-btn' data-character-id='")
-					html.WriteString(strconv.Itoa(pilotID))
-					html.WriteString("' aria-pressed='false' title='Show only systems where this pilot appears' aria-label='Show only systems where this pilot appears as an attacker' role='button' tabindex='0'>")
-					html.WriteString(pilotIconRunningHTML)
-					html.WriteString("</span>")
-					html.WriteString("</span>")
-				} else {
-					// Normal case: ship type text links to pilot losses.
-					html.WriteString("<a target='_blank' rel='noopener noreferrer' class='pilot-link' href='")
-					html.WriteString(zkbLossesURL)
-					writePilotLinkAttrs(html, meta, pilotID)
-					html.WriteString("'>")
-					writeShipTypeTextHTML(html, attackerShip)
-					html.WriteString("</a>")
-				}
-			} else {
-				html.WriteString(entityMilitiaHTML(attacker.FactionID, selectedFactionID))
-				writeAttackerShipTypeHTML(html, iconHTML, attackerShip, attackerIsNPC)
-			}
-			html.WriteString(" with ")
-			html.WriteString(template.HTMLEscapeString(weapon))
+		html.WriteString("<table class='attackers-table'>")
+		for _, attacker := range kill.Attackers {
+			renderAttackerRow(attacker)
 		}
+		html.WriteString("</table>")
 	}
 	html.WriteString("</span>")
 }
