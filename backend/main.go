@@ -2544,6 +2544,27 @@ func killmailHasOpposingMilitia(killmail *zkillboardcache.CachedKillmail) bool {
 	return false
 }
 
+// killmailHasMilitiaFactions checks if the kill involves the given faction AND one of its enemy factions.
+// Both the friendly and opposing faction must be present among attackers or victim.
+// killmailHasEnemyOfFaction returns true if the kill has any attacker from an enemy faction
+// of the given factionID.
+func killmailHasEnemyOfFaction(killmail *CachedKillmail, factionID int) bool {
+	f, ok := factionByID[factionID]
+	if !ok {
+		return false
+	}
+	enemySet := make(map[int]bool, len(f.EnemyIDs))
+	for _, eid := range f.EnemyIDs {
+		enemySet[eid] = true
+	}
+	for _, a := range killmail.Attackers {
+		if enemySet[a.FactionID] {
+			return true
+		}
+	}
+	return false
+}
+
 // isKillWithinStargateRange returns true if the kill is within 1000km of a stargate.
 func isKillWithinStargateRange(killmail *zkillboardcache.CachedKillmail) bool {
 	if killmail.Victim.Position == nil {
@@ -2617,7 +2638,7 @@ func isValidKillmail(killmail *zkillboardcache.CachedKillmail) (bool, bool) {
 		}
 		killPos := [3]float64{killmail.Victim.Position.X, killmail.Victim.Position.Y, killmail.Victim.Position.Z}
 		dist, _, _ := findNearestStationDistance(killmail.SolarSystemID, killPos)
-		if dist > 0 {
+		if dist > 0 && killmailHasOpposingMilitia(killmail) {
 			return true, true
 		}
 		// Not near a station — check stargate proximity if militia involved
@@ -3828,6 +3849,18 @@ func loadMockData(mw io.Writer) {
 		systemStationsMu.Unlock()
 	}
 
+	// Per-system attacker faction compositions for highsec mock kills.
+	// Opposing pair = both factions are enemies (Caldari↔Gallente, Amarr↔Minmatar).
+	// Same faction or NPC-only = not opposing.
+	highsecSystemFactions := map[int][]int{
+		50000001: {500002, 500010, 0, 0}, // Caldari → Gallente+Guristas+NPCs → opposing ✓
+		50000002: {500001, 500010, 0, 0}, // Gallente → Caldari+Guristas+NPCs → opposing ✓
+		50000003: {500004, 500011, 0, 0}, // Amarr → Minmatar+Angels+NPCs → opposing ✓
+		50000004: {500003, 500011, 0, 0}, // Minmatar → Amarr+Angels+NPCs → opposing ✓
+		50000005: {500001, 500002, 0, 0}, // Guristas → Caldari+Gallente+NPCs → opposing ✓
+		50000006: {500003, 500004, 0, 0}, // Angels → Amarr+Minmatar+NPCs → opposing ✓
+	}
+
 	// Populate mock FW systems so rebuildFWKillsHTML has data to iterate
 	fwSystemsMu.Lock()
 	fwSystemsByID = make(map[int]int, len(highsecMocks))
@@ -4342,14 +4375,23 @@ func loadMockData(mw io.Writer) {
 				killTime = startTime.Add(-1 * time.Minute) // Set to 1 minute ago if somehow in future
 			}
 
-			// Generate attackers
-			attackers := make([]zkillboardcache.ESIAttacker, 0, kill.attackerCount+2)
-		// Faction IDs for mock attackers so militia icons are visible
+		// Generate attackers
+		attackers := make([]zkillboardcache.ESIAttacker, 0, kill.attackerCount+2)
+		// Highsec mock systems use per-system attacker factions (see highsecSystemFactions).
+		// All other systems cycle through mockFactionIDs so militia icons are visible.
 		mockFactionIDs := []int{500001, 500002, 500003, 500004, 500010, 500011}
+		hsFactions, isHighsecMock := highsecSystemFactions[systemID]
 		for j := 0; j < kill.attackerCount; j++ {
 			characterID := 1000000 + j + killmailID
 			assignShipType(characterID, nil)
-			factionID := mockFactionIDs[(killmailID+j)%len(mockFactionIDs)]
+			var factionID int
+			if isHighsecMock && j < len(hsFactions) {
+				factionID = hsFactions[j]
+			} else if isHighsecMock && len(hsFactions) == 0 {
+				factionID = 0
+			} else {
+				factionID = mockFactionIDs[(killmailID+j)%len(mockFactionIDs)]
+			}
 			attackers = append(attackers, zkillboardcache.ESIAttacker{
 				CharacterID:    characterID,
 				CorporationID:  2000000 + j + killmailID,
@@ -5461,8 +5503,8 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 		html.WriteString("<td data-label='Notes'><div class='killmail-container'>")
 		if len(system.RecentKills) > 0 {
 			displayCount := len(system.RecentKills)
-			if displayCount > 5 {
-				displayCount = 5
+			if displayCount > 3 {
+				displayCount = 3
 			}
 			for i := 0; i < displayCount; i++ {
 				html.WriteString("<div class='killmail-row' data-order='")
@@ -5475,8 +5517,8 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 				renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, selectedFactionID, system.TradeHub)
 				html.WriteString("</div>")
 			}
-			if len(system.RecentKills) > 5 {
-				remainingKills := len(system.RecentKills) - 5
+			if len(system.RecentKills) > 3 {
+				remainingKills := len(system.RecentKills) - 3
 				html.WriteString("<details class='killmail-overflow'>")
 				html.WriteString("<summary>")
 				html.WriteString("<span class='killmail-overflow-show'>Show ")
@@ -5494,7 +5536,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 				}
 				html.WriteString("</span>")
 				html.WriteString("</summary>")
-				for i := 5; i < len(system.RecentKills); i++ {
+				for i := 3; i < len(system.RecentKills); i++ {
 					kill := system.RecentKills[i]
 					html.WriteString("<div class='killmail-row' data-order='")
 					html.WriteString(strconv.Itoa(i))
@@ -5669,6 +5711,9 @@ func renderFWHTML(factionID int, characterNames map[int]string, characterNameErr
 			var filtered []CachedKillmail
 			for _, kill := range kills {
 				if hasOnlyNPCs(&kill) {
+					continue
+				}
+				if !killmailHasEnemyOfFaction(&kill, factionID) {
 					continue
 				}
 				killTime, err := time.Parse("2006-01-02T15:04:05Z", kill.KillmailTime)

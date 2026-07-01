@@ -651,7 +651,7 @@ type StationSDE struct {
 	Position  [3]float64
 }
 
-// getStationsFromSDE reads station data from staStations.jsonl in the SDE
+// getStationsFromSDE reads station data from staStations.jsonl or npcStations.jsonl
 func getStationsFromSDE() ([]StationSDE, error) {
 	stations := []StationSDE{}
 
@@ -660,17 +660,20 @@ func getStationsFromSDE() ([]StationSDE, error) {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && strings.HasSuffix(info.Name(), "staStations.jsonl") {
-			stationsFile = path
-			return io.EOF
+		if !info.IsDir() {
+			name := info.Name()
+			if strings.HasSuffix(name, "staStations.jsonl") || strings.HasSuffix(name, "npcStations.jsonl") {
+				stationsFile = path
+				return io.EOF
+			}
 		}
 		return nil
 	})
 	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("error searching for staStations.jsonl: %v", err)
+		return nil, fmt.Errorf("error searching for station file: %v", err)
 	}
 	if stationsFile == "" {
-		return nil, fmt.Errorf("staStations.jsonl not found in SDE")
+		return nil, fmt.Errorf("staStations.jsonl or npcStations.jsonl not found in SDE")
 	}
 
 	log.Printf("Reading stations from %s", stationsFile)
@@ -678,6 +681,7 @@ func getStationsFromSDE() ([]StationSDE, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read stations file: %v", err)
 	}
+	isNewFormat := strings.HasSuffix(stationsFile, "npcStations.jsonl")
 	lines := strings.Split(string(content), "\n")
 	for i, line := range lines {
 		if strings.TrimSpace(line) == "" {
@@ -694,7 +698,11 @@ func getStationsFromSDE() ([]StationSDE, error) {
 		}
 		name, ok := raw["stationName"].(string)
 		if !ok {
-			continue
+			if isNewFormat {
+				name = fmt.Sprintf("Station %d", int(key))
+			} else {
+				continue
+			}
 		}
 		systemID, ok := raw["solarSystemID"].(float64)
 		if !ok {
