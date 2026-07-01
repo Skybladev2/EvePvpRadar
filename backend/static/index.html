@@ -1255,11 +1255,11 @@
         }
         .militia-label {
             font-weight: 500;
-            color: #aaa;
+            color: #e0e0e0;
             margin-right: 0.25rem;
         }
         .militia-btn {
-            padding: 0.375rem 0.75rem;
+            padding: 0.375rem 0.75rem 0.375rem 0.28rem;
             border: 1px solid #555;
             border-radius: 4px;
             background: #2a2a2a;
@@ -1267,6 +1267,9 @@
             cursor: pointer;
             font-size: 0.85em;
             transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
         }
         .militia-btn:hover {
             background: #3a3a3a;
@@ -1279,10 +1282,6 @@
         .militia-btn.militia-enemy {
             border-color: #f44336;
             color: #ef9a9a;
-        }
-        .militia-btn.militia-active::after {
-            content: " ✔";
-            color: #4CAF50;
         }
         /* Militia icons in killmail rows */
         .militia-icon-placeholder {
@@ -1304,6 +1303,9 @@
             background-position: center;
             background-repeat: no-repeat;
         }
+        .militia-btn .militia-icon {
+            border: none;
+        }
         .militia-icon.militia-friendly {
             border-color: #4CAF50;
         }
@@ -1311,9 +1313,6 @@
             border-color: #f44336;
         }
         /* Highsec checkbox in FW mode */
-        #militia-highsec-label {
-            margin-left: 0.5rem;
-        }
         /* Trade hub system name styling */
         #result td a.trade-hub {
             font-weight: bold;
@@ -3779,7 +3778,7 @@ function hideSetDestinationButtons() {
             <span>
                 Hide systems with gatecamps on route
                 <span class="filter-hint-icons" id="filter-gatecamps-hint-icons">
-                    <span class="filter-hint-icon filter-hint-warning" id="filter-gatecamps-warning-icon" role="img" aria-label="Warning icon">⚠</span>
+                    <span class="filter-hint-icon filter-hint-warning" id="filter-gatecamps-warning-icon" role="img" aria-label="Warning icon" title="Route contains gatecamps">⚠</span>
                     <span class="filter-hint-icon" id="filter-gatecamps-running-icon-wrap">
                         <span id="filter-gatecamps-running-icon" aria-label="Running pilot icon"></span>
                     </span>
@@ -3801,12 +3800,12 @@ function hideSetDestinationButtons() {
     </div>
     <div id="militia-selection" class="fw-only" style="display:none">
         <span class="militia-label">My militia:</span>
-        <button class="militia-btn" data-militia="caldari" data-faction-id="500001">Caldari</button>
-        <button class="militia-btn" data-militia="gallente" data-faction-id="500002">Gallente</button>
-        <button class="militia-btn" data-militia="amarr" data-faction-id="500003">Amarr</button>
-        <button class="militia-btn" data-militia="minmatar" data-faction-id="500004">Minmatar</button>
-        <button class="militia-btn" data-militia="guristas" data-faction-id="500010">Guristas</button>
-        <button class="militia-btn" data-militia="angels" data-faction-id="500011">Angels</button>
+        <button class="militia-btn" data-militia="caldari" data-faction-id="500001"><span class="militia-icon militia-icon--caldari"></span>Caldari</button>
+        <button class="militia-btn" data-militia="gallente" data-faction-id="500002"><span class="militia-icon militia-icon--gallente"></span>Gallente</button>
+        <button class="militia-btn" data-militia="amarr" data-faction-id="500003"><span class="militia-icon militia-icon--amarr"></span>Amarr</button>
+        <button class="militia-btn" data-militia="minmatar" data-faction-id="500004"><span class="militia-icon militia-icon--minmatar"></span>Minmatar</button>
+        <button class="militia-btn" data-militia="guristas" data-faction-id="500010"><span class="militia-icon militia-icon--guristas"></span>Guristas</button>
+        <button class="militia-btn" data-militia="angels" data-faction-id="500011"><span class="militia-icon militia-icon--angels"></span>Angels</button>
     </div>
     [[.InitialTableHTML]]
 </body>

@@ -758,9 +758,11 @@ func rebuildReadyTablesHTML() {
 		campKills := getTheraCampKills()
 
 		// Collect attacker character IDs (only those shown in UI: up to 3 kills per system and up to 10 Thera camps)
-		var characterIDs []int
-		for _, system := range result {
-			for i := 0; i < 3 && i < len(system.RecentKills); i++ {
+	sort.Slice(result, func(i, j int) bool { return result[i].Weight < result[j].Weight })
+
+	var characterIDs []int
+	for _, system := range result {
+		for i := 0; i < 3 && i < len(system.RecentKills); i++ {
 				for _, a := range system.RecentKills[i].Attackers {
 					if a.CharacterID != 0 {
 						characterIDs = append(characterIDs, a.CharacterID)
@@ -2516,6 +2518,83 @@ func initCache() error {
 	return nil
 }
 
+// killmailHasOpposingMilitia returns true if any two involved parties (attackers or victim)
+// belong to militia factions that are enemies of each other.
+func killmailHasOpposingMilitia(killmail *zkillboardcache.CachedKillmail) bool {
+	factions := make(map[int]struct{})
+	if isMilitiaFaction(killmail.Victim.FactionID) {
+		factions[killmail.Victim.FactionID] = struct{}{}
+	}
+	for _, a := range killmail.Attackers {
+		if isMilitiaFaction(a.FactionID) {
+			factions[a.FactionID] = struct{}{}
+		}
+	}
+	for fid := range factions {
+		f, ok := factionByID[fid]
+		if !ok {
+			continue
+		}
+		for _, eid := range f.EnemyIDs {
+			if _, exists := factions[eid]; exists {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isKillWithinStargateRange returns true if the kill is within 1000km of a stargate.
+func isKillWithinStargateRange(killmail *zkillboardcache.CachedKillmail) bool {
+	if killmail.Victim.Position == nil {
+		return false
+	}
+	attackers := make([]ESIAttacker, len(killmail.Attackers))
+	for i, attacker := range killmail.Attackers {
+		attackers[i] = ESIAttacker{
+			CharacterID:    attacker.CharacterID,
+			CorporationID:  attacker.CorporationID,
+			AllianceID:     attacker.AllianceID,
+			FactionID:      attacker.FactionID,
+			SecurityStatus: attacker.SecurityStatus,
+			DamageDone:     attacker.DamageDone,
+			FinalBlow:      attacker.FinalBlow,
+			WeaponTypeID:   attacker.WeaponTypeID,
+			ShipTypeID:     attacker.ShipTypeID,
+		}
+	}
+	victimPosition := &struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+		Z float64 `json:"z"`
+	}{
+		X: killmail.Victim.Position.X,
+		Y: killmail.Victim.Position.Y,
+		Z: killmail.Victim.Position.Z,
+	}
+	esiKillmail := &ESIKillmail{
+		KillmailID:   killmail.KillmailID,
+		KillmailTime: killmail.KillmailTime,
+		Victim: ESIVictim{
+			CharacterID:   killmail.Victim.CharacterID,
+			CorporationID: killmail.Victim.CorporationID,
+			AllianceID:    killmail.Victim.AllianceID,
+			FactionID:     killmail.Victim.FactionID,
+			DamageTaken:   killmail.Victim.DamageTaken,
+			ShipTypeID:    killmail.Victim.ShipTypeID,
+			Position:      victimPosition,
+		},
+		Attackers:     attackers,
+		SolarSystemID: killmail.SolarSystemID,
+	}
+	_, _, isWithinRange, _, err := getKillPositionAndDistance(
+		killmail.SolarSystemID,
+		killmail.ZKBInfo.ZKB.LocationID,
+		esiKillmail,
+	)
+	return err == nil && isWithinRange
+}
+
 // isValidKillmail checks if a killmail is valid for precalculation
 // Valid means: lowsec/nullsec system (or Pochven, or Thera), within 1000km of a stargate or station.
 // Thera has no stargates, so Thera kills are valid if they have position data.
@@ -2540,6 +2619,13 @@ func isValidKillmail(killmail *zkillboardcache.CachedKillmail) (bool, bool) {
 		dist, _, _ := findNearestStationDistance(killmail.SolarSystemID, killPos)
 		if dist > 0 {
 			return true, true
+		}
+		// Not near a station — check stargate proximity if militia involved
+		if killmailHasOpposingMilitia(killmail) {
+			withinRange := isKillWithinStargateRange(killmail)
+			if withinRange {
+				return true, false
+			}
 		}
 		logging.Debugf("Killmail %d: System is highsec but not near a station, skipping", killmail.KillmailID)
 		return false, false
@@ -3179,7 +3265,7 @@ func precalculateNearTradeHubsModeForSystem(targetSystemID int) {
 
 		// Use shared route cache (same as proximity mode)
 		viaThera, distance, theraInfo, _, _, maxShipSize, route := getProximityRoute(hub.SystemID, targetSystemID)
-		logging.Debugf("precalculateNearTradeHubs: hub=%s(%d) → target=%s(%d): distance=%d", hub.Name, hub.SystemID, targetSystem.SystemName, targetSystemID, distance)
+		logging.Debugf("precalculateNearTradeHubs: hub=%s(%d) → target=%s(%d): distance=%d routefinder=%v", hub.Name, hub.SystemID, targetSystem.SystemName, targetSystemID, distance, globalRouteFinder != nil)
 		if distance < 0 {
 			continue
 		}
@@ -3248,7 +3334,6 @@ func precalculateNearTradeHubsModeForSystem(targetSystemID int) {
 					Security:    targetSystem.Security,
 					Dist:        closestPrimary.distance,
 					ViaThera:    closestPrimary.viaThera,
-					TheraDist:   closestPrimary.distance,
 					TheraInfo:   closestPrimary.theraInfo,
 					MaxShipSize: closestPrimary.maxShipSize,
 					Route:       closestPrimary.route,
@@ -3291,6 +3376,7 @@ func recalculateFromKills(kills []zkillboardcache.CachedKillmail) {
 		data.systemsWithKills = make(map[int][]CachedKillmail)
 		data.normalMode = make(map[int][]PrecalculatedSystemData)
 		data.nearTradeHubsMode = make(map[string]PrecalculatedSystemData)
+		data.highsecStationKills = make(map[int][]CachedKillmail)
 		data.calculatedKillmails = make(map[int]time.Time)
 	})
 
@@ -3359,12 +3445,13 @@ func recalculateForTheraUpdate() {
 		data.systemsWithKills = make(map[int][]CachedKillmail)
 		data.normalMode = make(map[int][]PrecalculatedSystemData)
 		data.nearTradeHubsMode = make(map[string]PrecalculatedSystemData)
+		data.highsecStationKills = make(map[int][]CachedKillmail)
 		data.calculatedKillmails = make(map[int]time.Time)
 		logging.Debugf("recalculateForTheraUpdate: Clearing precalculated data (had %d systems with kills)", beforeClear)
 		logging.Debugf("recalculateForTheraUpdate: Cleared precalculated data, will recalculate %d killmails", len(kills))
 	})
 
-	// Recalculate each killmail (this will rebuild systemsWithKills and nearTradeHubsMode with updated Thera routes)
+	// Recalculate each killmail (this will rebuild systemsWithKills, nearTradeHubsMode, and highsecStationKills with updated Thera routes)
 	for i := range kills {
 		kill := &kills[i]
 		calculateDataForKillmail(kill.KillmailID, kill)
@@ -3764,6 +3851,14 @@ func loadMockData(mw io.Writer) {
 		systemStationsMu.Unlock()
 	}
 
+	// Populate mock FW systems so rebuildFWKillsHTML has data to iterate
+	fwSystemsMu.Lock()
+	fwSystemsByID = make(map[int]int, len(highsecMocks))
+	for _, hm := range highsecMocks {
+		fwSystemsByID[hm.systemID] = hm.factionID
+	}
+	fwSystemsMu.Unlock()
+
 	// Ensure Thera and Zarzakh systems exist in the systems list
 	theraSystem := getSystemById(TheraSystemID)
 	if theraSystem.SystemID == 0 {
@@ -4059,10 +4154,13 @@ func loadMockData(mw io.Writer) {
 		{nullsecSystem2, sys2.SystemName, sys2.Security, 2, 12, 100002, 1 * time.Minute, "thera"},
 		{nullsecSystem2, sys2.SystemName, sys2.Security, 2, 12, 100003, 2 * time.Minute, "thera"},
 
-		// System 3: Nullsec, 3 kills, < 10 attackers, route through Zarzakh only
-		{nullsecSystem3, sys3.SystemName, sys3.Security, 3, 7, 100004, 3 * time.Minute, "zarzakh"},
-		{nullsecSystem3, sys3.SystemName, sys3.Security, 3, 7, 100005, 4 * time.Minute, "zarzakh"},
-		{nullsecSystem3, sys3.SystemName, sys3.Security, 3, 7, 100006, 5 * time.Minute, "zarzakh"},
+		// System 3: Nullsec, 6 kills, < 10 attackers, route through Zarzakh only
+		{nullsecSystem3, sys3.SystemName, sys3.Security, 6, 7, 100004, 3 * time.Minute, "zarzakh"},
+		{nullsecSystem3, sys3.SystemName, sys3.Security, 6, 7, 100005, 4 * time.Minute, "zarzakh"},
+		{nullsecSystem3, sys3.SystemName, sys3.Security, 6, 7, 100006, 5 * time.Minute, "zarzakh"},
+		{nullsecSystem3, sys3.SystemName, sys3.Security, 6, 7, 100050, 6 * time.Minute, "zarzakh"},
+		{nullsecSystem3, sys3.SystemName, sys3.Security, 6, 7, 100051, 7 * time.Minute, "zarzakh"},
+		{nullsecSystem3, sys3.SystemName, sys3.Security, 6, 7, 100052, 8 * time.Minute, "zarzakh"},
 
 		// System 4: Nullsec, 2 kills, >= 10 attackers, route through both Thera and Zarzakh
 		{nullsecSystem4, sys4.SystemName, sys4.Security, 2, 15, 100007, 6 * time.Minute, "both"},
@@ -4129,7 +4227,7 @@ func loadMockData(mw io.Writer) {
 	mockKillmailID := 1200000
 	for _, hm := range highsecMocks {
 		attackerCount := 4
-		for j := 0; j < 2; j++ {
+		for j := 0; j < 7; j++ {
 			timeOffset := time.Duration(j * 5) * time.Minute
 			mockKillmails = append(mockKillmails, struct {
 				systemID      int
@@ -5386,8 +5484,8 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 		html.WriteString("<td data-label='Notes'><div class='killmail-container'>")
 		if len(system.RecentKills) > 0 {
 			displayCount := len(system.RecentKills)
-			if displayCount > 3 {
-				displayCount = 3
+			if displayCount > 5 {
+				displayCount = 5
 			}
 			for i := 0; i < displayCount; i++ {
 				html.WriteString("<div class='killmail-row' data-order='")
@@ -5397,11 +5495,11 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 				html.WriteString(" data-attacker-count='")
 				html.WriteString(strconv.Itoa(len(kill.Attackers)))
 				html.WriteString("'>")
-				renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, selectedFactionID)
+				renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, selectedFactionID, system.TradeHub)
 				html.WriteString("</div>")
 			}
-			if len(system.RecentKills) > 3 {
-				remainingKills := len(system.RecentKills) - 3
+			if len(system.RecentKills) > 5 {
+				remainingKills := len(system.RecentKills) - 5
 				html.WriteString("<details class='killmail-overflow'>")
 				html.WriteString("<summary>")
 				html.WriteString("<span class='killmail-overflow-show'>Show ")
@@ -5419,14 +5517,14 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 				}
 				html.WriteString("</span>")
 				html.WriteString("</summary>")
-				for i := 3; i < len(system.RecentKills); i++ {
+				for i := 5; i < len(system.RecentKills); i++ {
 					kill := system.RecentKills[i]
 					html.WriteString("<div class='killmail-row' data-order='")
 					html.WriteString(strconv.Itoa(i))
 					html.WriteString("' data-attacker-count='")
 					html.WriteString(strconv.Itoa(len(kill.Attackers)))
 					html.WriteString("'>")
-					renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, selectedFactionID)
+					renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, selectedFactionID, system.TradeHub)
 					html.WriteString("</div>")
 				}
 				html.WriteString("</details>")
@@ -5473,7 +5571,7 @@ func renderTheraCampsHTMLWithNames(campKills []CachedKillmail, characterNames ma
 		html.WriteString(strconv.Itoa(i))
 		html.WriteString("'>")
 		// Thera camps are rendered independently; we don't compute multi-system highlights here.
-		renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, nil, nil, selectedFactionID)
+		renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, nil, nil, selectedFactionID, "")
 		html.WriteString("</div>")
 	}
 	html.WriteString("</div></div></div>")
@@ -5571,7 +5669,8 @@ func fetchFWSystems() {
 }
 
 // renderFWHTML builds pre-rendered HTML for FW mode with the given faction.
-func renderFWHTML(factionID int) string {
+// characterNames/characterNameErrors are pre-resolved (pass nil to resolve internally).
+func renderFWHTML(factionID int, characterNames map[int]string, characterNameErrors map[int]string) string {
 	result := getNearTradeHubsResult()
 	if len(result) == 0 {
 		return "<div id=\"result-container\">" + ccpFooterHTML + "</div>"
@@ -5582,9 +5681,9 @@ func renderFWHTML(factionID int) string {
 	data := readFn()
 	oneHourAgo := time.Now().Add(-1 * time.Hour)
 	if data.highsecStationKills != nil {
-		resultByID := make(map[int]*SystemInRange, len(result))
+		resultByID := make(map[int]int, len(result))
 		for i := range result {
-			resultByID[result[i].SystemID] = &result[i]
+			resultByID[result[i].SystemID] = i
 		}
 		for systemID, kills := range data.highsecStationKills {
 			if kills == nil || (systemID >= 31000000 && systemID <= 31999999) {
@@ -5606,11 +5705,16 @@ func renderFWHTML(factionID int) string {
 			if len(filtered) == 0 {
 				continue
 			}
-			if existing, ok := resultByID[systemID]; ok {
-				existing.RecentKills = append(existing.RecentKills, filtered...)
-				sort.Slice(existing.RecentKills, func(i, j int) bool {
-					ti, _ := time.Parse("2006-01-02T15:04:05Z", existing.RecentKills[i].KillmailTime)
-					tj, _ := time.Parse("2006-01-02T15:04:05Z", existing.RecentKills[j].KillmailTime)
+			sort.Slice(filtered, func(i, j int) bool {
+				ti, _ := time.Parse("2006-01-02T15:04:05Z", filtered[i].KillmailTime)
+				tj, _ := time.Parse("2006-01-02T15:04:05Z", filtered[j].KillmailTime)
+				return ti.After(tj)
+			})
+			if idx, ok := resultByID[systemID]; ok {
+				result[idx].RecentKills = append(result[idx].RecentKills, filtered...)
+				sort.Slice(result[idx].RecentKills, func(i, j int) bool {
+					ti, _ := time.Parse("2006-01-02T15:04:05Z", result[idx].RecentKills[i].KillmailTime)
+					tj, _ := time.Parse("2006-01-02T15:04:05Z", result[idx].RecentKills[j].KillmailTime)
 					return ti.After(tj)
 				})
 			} else {
@@ -5618,29 +5722,72 @@ func renderFWHTML(factionID int) string {
 				if sys.SystemID == 0 {
 					continue
 				}
-				result = append(result, SystemInRange{
+				var nearestHub *TradeHub
+				nearestDist := -1
+				var nearestViaThera bool
+				var nearestTheraInfo string
+				var nearestMaxShipSize string
+				var nearestRoute []EveScoutSystem
+				for _, hub := range tradeHubs {
+					if hub.Type != "primary" {
+						continue
+					}
+					viaThera, dist, theraInfo, _, _, maxShipSize, route := getProximityRoute(hub.SystemID, systemID)
+					if dist >= 0 && dist <= nearTradeHubsMaxDisplayJumps && (nearestHub == nil || dist < nearestDist) {
+						h := hub
+						nearestHub = &h
+						nearestDist = dist
+						nearestViaThera = viaThera
+						nearestTheraInfo = theraInfo
+						nearestMaxShipSize = maxShipSize
+						nearestRoute = route
+					}
+				}
+				if nearestHub == nil {
+					continue
+				}
+				entry := SystemInRange{
 					SystemID:    systemID,
 					Name:        sys.SystemName,
-					Dist:        0,
 					Security:    sys.Security,
+					Dist:        nearestDist,
+					TradeHub:    nearestHub.Name,
 					RecentKills: filtered,
-					Weight:      float64(nearTradeHubsMaxDisplayJumps + 1000),
-				})
+					ViaThera:    nearestViaThera,
+					TheraInfo:   nearestTheraInfo,
+					MaxShipSize: nearestMaxShipSize,
+					Route:       nearestRoute,
+				}
+				if nearestViaThera {
+					entry.TheraDist = nearestDist
+				}
+				entry.Weight = float64(nearestDist)
+				for _, k := range filtered {
+					kt, err := time.Parse("2006-01-02T15:04:05Z", k.KillmailTime)
+					if err == nil {
+						entry.Weight += time.Since(kt).Minutes()
+						break
+					}
+				}
+				result = append(result, entry)
+				resultByID[systemID] = len(result) - 1
 			}
 		}
 	}
 
-	var characterIDs []int
-	for _, system := range result {
-		for i := 0; i < 3 && i < len(system.RecentKills); i++ {
-			for _, a := range system.RecentKills[i].Attackers {
-				if a.CharacterID != 0 {
-					characterIDs = append(characterIDs, a.CharacterID)
+	if characterNames == nil {
+		var characterIDs []int
+		for _, system := range result {
+			for i := 0; i < 3 && i < len(system.RecentKills); i++ {
+				for _, a := range system.RecentKills[i].Attackers {
+					if a.CharacterID != 0 {
+						characterIDs = append(characterIDs, a.CharacterID)
+					}
 				}
 			}
 		}
+		characterNames, characterNameErrors = resolveCharacterNames(characterIDs)
 	}
-	characterNames, characterNameErrors := resolveCharacterNames(characterIDs)
 
 	html := renderHTMLTableWithNames(result, "near_trade_hubs", characterNames, characterNameErrors, factionID)
 	return "<div id=\"result-container\">" + html + ccpFooterHTML + "</div>"
@@ -5648,6 +5795,41 @@ func renderFWHTML(factionID int) string {
 
 // rebuildFWKillsHTML builds pre-rendered HTML for all 6 factions in parallel.
 func rebuildFWKillsHTML() {
+	// Resolve all character names once (instead of once per faction goroutine)
+	// to avoid redundant ESI requests.
+	baseResult := getNearTradeHubsResult()
+	var charIDs []int
+	for _, system := range baseResult {
+		for i := 0; i < 3 && i < len(system.RecentKills); i++ {
+			for _, a := range system.RecentKills[i].Attackers {
+				if a.CharacterID != 0 {
+					charIDs = append(charIDs, a.CharacterID)
+				}
+			}
+		}
+	}
+	// Also collect from highsec kills which will be merged in renderFWHTML
+	readFn := precalculatedData.Read()
+	data := readFn()
+	if data.highsecStationKills != nil {
+		for systemID, kills := range data.highsecStationKills {
+			if kills == nil || (systemID >= 31000000 && systemID <= 31999999) {
+				continue
+			}
+			for _, kill := range kills {
+				if hasOnlyNPCs(&kill) {
+					continue
+				}
+				for _, a := range kill.Attackers {
+					if a.CharacterID != 0 {
+						charIDs = append(charIDs, a.CharacterID)
+					}
+				}
+			}
+		}
+	}
+	characterNames, characterNameErrors := resolveCharacterNames(charIDs)
+
 	newFW := make(map[string]string, len(militiaFactions))
 	type result struct {
 		shortName string
@@ -5657,7 +5839,7 @@ func rebuildFWKillsHTML() {
 	for _, f := range militiaFactions {
 		f := f
 		go func() {
-			h := renderFWHTML(f.ID)
+			h := renderFWHTML(f.ID, characterNames, characterNameErrors)
 			ch <- result{shortName: f.ShortName, html: h}
 		}()
 	}
@@ -5763,6 +5945,7 @@ func zkillAsearchPilotLossesInShipURL(characterID, shipTypeID int) string {
 
 // renderKillmailHTML renders a single killmail as HTML
 // selectedFactionID: 0 = no militia highlighting, otherwise one of FactionCaldari etc.
+// tradeHub: used to make attackers toggle IDs unique when same killmail appears in multiple trade hub rows
 func renderKillmailHTML(
 	html *strings.Builder,
 	kill *CachedKillmail,
@@ -5772,6 +5955,7 @@ func renderKillmailHTML(
 	pilotMultiSystem map[int]bool,
 	systemsInResult map[int]bool,
 	selectedFactionID int,
+	tradeHub string,
 ) {
 	// Grey monochrome pilot icons (SVG keeps them consistent across OS/font rendering).
 	// Running human icon from static/running-human.svg (repeat pilots across multiple systems).
@@ -5900,7 +6084,8 @@ func renderKillmailHTML(
 		html.WriteString(strconv.Itoa(attackerCount))
 		html.WriteString(" ")
 		// Generate unique ID for this attackers list
-		uniqueID := fmt.Sprintf("attackers-%d-%d", kill.KillmailID, killTime.Unix())
+		// Include tradeHub to avoid collisions when the same killmail appears under multiple trade hub rows
+		uniqueID := fmt.Sprintf("attackers-%d-%d-%s", kill.KillmailID, killTime.Unix(), tradeHub)
 		html.WriteString("<span class='attackers-toggle' data-target='")
 		html.WriteString(uniqueID)
 		html.WriteString("' data-count='")
@@ -7325,7 +7510,7 @@ func main() {
 		readyFWMu.RUnlock()
 		if html == "" {
 			invalidateIndexHTMLCache()
-			html = "<div>Loading…</div>"
+			html = "<table id=\"result\"><tbody></tbody></table>"
 		}
 		if _, err := w.Write([]byte(html)); err != nil {
 			log.Printf("Error writing FW kills response: %v", err)
