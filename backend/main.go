@@ -1376,7 +1376,13 @@ func esiCharacterNameFailureMsg(characterID int, _ string) string {
 // IMPORTANT: single-attempt only (no retries). Failures are cached briefly (negative cache).
 func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 	if mockData {
-		return nil, nil
+		names := make(map[int]string, len(ids))
+		for _, id := range ids {
+			if id != 0 {
+				names[id] = fmt.Sprintf("Mock Pilot %d", id)
+			}
+		}
+		return names, nil
 	}
 	seen := make(map[int]struct{})
 	var need []int
@@ -5643,7 +5649,7 @@ func entityMilitiaHTML(factionID, selectedFactionID int) string {
 			}
 		}
 	}
-	return fmt.Sprintf("<span class='%s militia-icon--%s' title='%s militia'></span>", cssClass, f.ShortName, f.Name)
+	return fmt.Sprintf("<span class='%s militia-icon--%s' data-tooltip='%s'></span>", cssClass, f.ShortName, f.Name)
 }
 
 // fetchFWSystems fetches FW system data from ESI and updates the cache
@@ -6125,22 +6131,17 @@ func renderKillmailHTML(
 
 		// Ship icon column
 		html.WriteString("<td class='attacker-ship'>")
-		if characterNames != nil && attacker.CharacterID != 0 {
-			writeShipTypeIconWithWikiHTML(html, iconHTML, attackerShip, attackerIsNPC)
-		} else {
-			if iconHTML != "" {
-				html.WriteString(iconHTML)
-			} else {
-				html.WriteString("• ")
-			}
-		}
+		writeShipTypeIconWithWikiHTML(html, iconHTML, attackerShip, attackerIsNPC)
 		html.WriteString("</td>")
 
 		// Description column: pilot link (or ship name) + weapon
 		html.WriteString("<td class='attacker-desc'>")
-		if characterNames != nil && attacker.CharacterID != 0 {
-			name := characterNames[attacker.CharacterID]
+		if attacker.CharacterID != 0 {
 			pilotID := attacker.CharacterID
+			var name string
+			if characterNames != nil {
+				name = characterNames[pilotID]
+			}
 			meta := pilotLinkMetaFor(pilotID, name, characterNameErrors)
 			var zkbLossesURL string
 			if attacker.ShipTypeID != 0 {
