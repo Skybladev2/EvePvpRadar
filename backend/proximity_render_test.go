@@ -51,14 +51,14 @@ func TestRenderProximityTableHidesStandingPilotIconWhenNamesResolved(t *testing.
 		},
 	}
 
-	withoutNamesHTML := renderHTMLTableWithNames(systems, "proximity", nil, nil, 0)
+	withoutNamesHTML := renderHTMLTableWithNames(systems, "proximity", nil, nil)
 	if strings.Contains(withoutNamesHTML, "/character/90000001/losses/") {
 		t.Fatalf("expected no pilot character link without resolved names")
 	}
 
 	withNamesHTML := renderHTMLTableWithNames(systems, "proximity", map[int]string{
 		attackerID: "Test Pilot",
-	}, nil, 0)
+	}, nil)
 
 	if !strings.Contains(withNamesHTML, "zkillboard.com/asearch/#") {
 		t.Fatalf("expected pilot zKill asearch losses link when names are resolved")
@@ -132,7 +132,7 @@ func TestRenderProximityTableShowsRunningPilotIconWhenNamesResolvedInMultiSystem
 
 	withNamesHTML := renderHTMLTableWithNames(systems, "proximity", map[int]string{
 		attackerID: "Test Pilot",
-	}, nil, 0)
+	}, nil)
 
 	if !strings.Contains(withNamesHTML, "zkillboard.com/asearch/#") {
 		t.Fatalf("expected pilot zKill asearch losses link when names are resolved")
@@ -198,7 +198,7 @@ func TestRenderProximityTableShowsESIFailurePilotTooltip(t *testing.T) {
 		attackerID: "",
 	}, map[int]string{
 		attackerID: esiErr,
-	}, 0)
+	})
 
 	if !strings.Contains(html, "data-pilot-unresolved='true'") {
 		t.Fatalf("expected unresolved pilot marker in HTML")
