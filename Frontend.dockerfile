@@ -18,11 +18,11 @@ ARG DEBIAN_SECURITY_MIRROR=${DEBIAN_MIRROR}-security
 RUN sed -i "s|URIs: http://deb.debian.org/debian$|URIs: ${DEBIAN_MIRROR}|" /etc/apt/sources.list.d/debian.sources && \
     sed -i "s|URIs: http://deb.debian.org/debian-security$|URIs: ${DEBIAN_SECURITY_MIRROR}|" /etc/apt/sources.list.d/debian.sources && \
     apt-get update && apt-get install -y --no-install-recommends \
-    nginx=1.22.1-9+deb12u8 \
-    libnginx-mod-http-lua=1:0.10.23-1+deb12u1 \
-    libnginx-mod-http-headers-more-filter=1:0.34-3 \
-    libnginx-mod-http-modsecurity=1.0.3-1+b2 \
-    modsecurity-crs=3.3.4-1+deb12u1 \
+    nginx \
+    libnginx-mod-http-lua \
+    libnginx-mod-http-headers-more-filter \
+    libnginx-mod-http-modsecurity \
+    modsecurity-crs \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /etc/nginx/modsecurity

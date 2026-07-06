@@ -405,6 +405,13 @@
             box-sizing: border-box;
             text-align: center;
         }
+        #result .attackers-table td:first-child:empty,
+        #thera-camps-container .attackers-table td:first-child:empty {
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+            padding: 0 !important;
+        }
         #result .attackers-table td:last-child,
         #thera-camps-container .attackers-table td:last-child {
             width: auto;
@@ -1290,41 +1297,17 @@
         .filter-indicator-tooltip-item {
             white-space: nowrap;
         }
-        #militia-selection {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            margin: 0.625rem 0;
-        }
-        .militia-label {
-            font-weight: 500;
-            color: #e0e0e0;
-            margin-right: 0.25rem;
-        }
-        .militia-btn {
-            padding: 0.375rem 0.75rem;
-            border: 1px solid #555;
-            border-radius: 4px;
-            background: #2a2a2a;
-            color: #e0e0e0;
-            cursor: pointer;
-            font-size: 0.85em;
-            transition: background-color 0.2s, border-color 0.2s, color 0.2s;
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-        }
-        .militia-btn:hover {
-            background: #3a3a3a;
-            border-color: #888;
-        }
-        .militia-btn.militia-active {
-            border-color: #4CAF50;
-            color: #81C784;
-        }
-        .militia-btn.militia-enemy {
-            border-color: #f44336;
-            color: #ef9a9a;
+        /* Faction icon in auth area (reuses militia-icon background classes) */
+        #militia-faction-icon {
+            display: inline-block;
+            width: 22px;
+            height: 22px;
+            vertical-align: middle;
+            border: none;
+            background-size: contain;
+            background-position: center;
+            background-repeat: no-repeat;
+            flex-shrink: 0;
         }
         /* Militia icons in killmail rows */
         .militia-icon-placeholder {
@@ -1345,9 +1328,6 @@
             background-size: contain;
             background-position: center;
             background-repeat: no-repeat;
-        }
-        .militia-btn .militia-icon {
-            border: none;
         }
         .militia-icon.militia-friendly {
             border-color: #4CAF50;
@@ -1645,10 +1625,6 @@ function handlePageReload() {
   // Restore checkbox and filter state
   restoreFilterState();
   
-  // Restore saved militia (default to "" = None)
-  const savedMilitia = localStorage.getItem('evePvpSearchMilitia') || '';
-  updateMilitiaHighlight(savedMilitia);
-  
   // Check if we just came back from authentication
   const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('auth') === 'success') {
@@ -1728,15 +1704,14 @@ function applyAuthFromPage() {
       characterPortrait.style.display = "block";
       characterPortrait.onerror = function() { this.style.display = "none"; };
     }
-    // Auto-select militia from character's ESI faction
-    if (data.militiaFactionID !== undefined) {
-      let shortName = "";
-      if (data.militiaFactionID) {
-        const btn = document.querySelector(`.militia-btn[data-faction-id="${data.militiaFactionID}"]`);
-        if (btn) shortName = btn.getAttribute('data-militia');
+    // Show faction icon if character has a militia
+    const factionIcon = document.getElementById("militia-faction-icon");
+    const militiaShortName = data.militiaShortName || "";
+    if (factionIcon) {
+      factionIcon.style.display = militiaShortName ? "inline-block" : "none";
+      if (militiaShortName) {
+        factionIcon.className = "militia-icon militia-icon--" + militiaShortName;
       }
-      localStorage.setItem('evePvpSearchMilitia', shortName);
-      updateMilitiaHighlight(shortName);
     }
     showSetDestinationButtons();
   } else {
@@ -1749,6 +1724,7 @@ function applyAuthFromPage() {
     }
     hideSetDestinationButtons();
   }
+  applyMilitiaFilter();
   return !!data.authenticated;
 }
 
@@ -1756,8 +1732,8 @@ async function loadInitialData() {
   // No initial data loading needed
 }
 
-// Fetch character militia faction from server and auto-select.
-// Retries until we get a definite answer (0 = not enlisted, or a faction ID)
+// Fetch character militia shortName from server and update UI.
+// Retries until we get a definite answer ("" = not enlisted, or a faction shortName)
 // or time out (handles the race where the SSO callback's ESI fetch hasn't
 // completed yet when the page first renders).
 async function tryFetchMilitiaFromServer() {
@@ -1766,14 +1742,11 @@ async function tryFetchMilitiaFromServer() {
       const resp = await fetch("/api/auth/militia");
       if (!resp.ok) return;
       const data = await resp.json();
-      if (data.militiaFactionID !== undefined) {
-        let shortName = "";
-        if (data.militiaFactionID) {
-          const btn = document.querySelector(`.militia-btn[data-faction-id="${data.militiaFactionID}"]`);
-          if (btn) shortName = btn.getAttribute('data-militia');
+      if (data.militiaShortName !== undefined) {
+        if (window.__auth) {
+          window.__auth.militiaShortName = data.militiaShortName || "";
         }
-        localStorage.setItem('evePvpSearchMilitia', shortName);
-        updateMilitiaHighlight(shortName);
+        applyAuthFromPage();
         return;
       }
     } catch (e) { /* retry */ }
@@ -1781,27 +1754,6 @@ async function tryFetchMilitiaFromServer() {
   }
 }
 
-// Militia faction enemy pairs: Caldari↔Gallente, Amarr↔Minmatar, Guristas at war with both Caldari and Gallente, Angels at war with both Amarr and Minmatar
-const militiaEnemies = { "caldari": ["gallente", "guristas"], "gallente": ["caldari", "guristas"], "amarr": ["minmatar", "angels"], "minmatar": ["amarr", "angels"], "guristas": ["caldari", "gallente"], "angels": ["amarr", "minmatar"] };
-function updateMilitiaHighlight(activeShortName) {
-  document.querySelectorAll(".militia-btn").forEach(b => {
-    b.classList.remove("militia-active", "militia-enemy");
-  });
-  if (!activeShortName) {
-    const noneBtn = document.querySelector('.militia-btn[data-militia=""]');
-    if (noneBtn) noneBtn.classList.add("militia-active");
-    document.querySelectorAll("#result .militia-icon, #result .militia-icon-placeholder, #thera-camps-container .militia-icon, #thera-camps-container .militia-icon-placeholder").forEach(el => el.style.display = "none");
-    return;
-  }
-  document.querySelectorAll("#result .militia-icon, #result .militia-icon-placeholder, #thera-camps-container .militia-icon, #thera-camps-container .militia-icon-placeholder").forEach(el => el.style.display = "");
-  const active = document.querySelector(`.militia-btn[data-militia="${activeShortName}"]`);
-  if (active) active.classList.add("militia-active");
-  const enemyList = militiaEnemies[activeShortName] || [];
-  enemyList.forEach(enemyShortName => {
-    const enemy = document.querySelector(`.militia-btn[data-militia="${enemyShortName}"]`);
-    if (enemy) enemy.classList.add("militia-enemy");
-  });
-}
 
 function bindEventHandlers() {
   debugLog("CLIENT: Binding event handlers");
@@ -2017,15 +1969,6 @@ function bindEventHandlers() {
       setMaxAttackersLimit(-1);
     });
   }
-
-  // Militia button handlers
-  document.querySelectorAll(".militia-btn").forEach(btn => {
-    btn.addEventListener("click", function() {
-      updateMilitiaHighlight(this.dataset.militia);
-      localStorage.setItem("evePvpSearchMilitia", this.dataset.militia);
-      applyMilitiaFilter();
-    });
-  });
 
   // Highsec checkbox persistence and handler
   const militiaHighsec = document.getElementById("militia-highsec");
@@ -2264,14 +2207,11 @@ async function handleModeChange() {
 
   const jumpCloneStations = document.getElementById("jump-clone-stations");
 
-  // Show/hide militia selection and highsec checkbox
-  const militiaSelection = document.getElementById("militia-selection");
+  // Show/hide highsec checkbox based on mode
   const militiaHighsecLabel = document.getElementById("militia-highsec-label");
   if (mode === "near_trade_hubs" || mode === "proximity") {
-    if (militiaSelection) militiaSelection.style.display = "flex";
     applyMilitiaFilter();
   } else {
-    if (militiaSelection) militiaSelection.style.display = "none";
     if (militiaHighsecLabel) militiaHighsecLabel.style.display = "none";
   }
 
@@ -3202,79 +3142,49 @@ function setMaxAttackersLimit(value) {
 
 // Apply militia filter: hide/show highsec kill rows and system rows based on selected militia and highsec checkbox.
 function applyMilitiaFilter() {
-  const activeBtn = document.querySelector(".militia-btn.militia-active");
-  const selectedMilitia = activeBtn ? activeBtn.dataset.militia : "";
+  const auth = window.__auth || {};
+  const militiaShortName = auth.militiaShortName || "";
   const highsecCheckbox = document.getElementById("militia-highsec");
   const showHighsec = highsecCheckbox ? highsecCheckbox.checked : false;
 
-  // Show/hide the highsec checkbox label based on whether a militia is selected
+  // Show/hide the highsec checkbox label based on whether character has militia
   const highsecLabel = document.getElementById("militia-highsec-label");
   if (highsecLabel) {
-    highsecLabel.style.display = selectedMilitia ? "" : "none";
+    highsecLabel.style.display = militiaShortName ? "" : "none";
   }
 
   const resultTable = document.getElementById("result");
   if (!resultTable) return;
 
   resultTable.querySelectorAll("tbody tr").forEach(row => {
-    // Check if any killmail-row in this system is highsec
+    // Show/hide highsec kill rows
     const highsecRows = row.querySelectorAll('.killmail-row[data-source="highsec-station"]');
     let hasVisibleHighsec = false;
 
     highsecRows.forEach(kmRow => {
-      if (!selectedMilitia) {
-        // No militia selected: hide all highsec kills
-        kmRow.style.display = "none";
-      } else if (!showHighsec) {
-        // Highsec unchecked: hide highsec kills
+      if (!militiaShortName || !showHighsec) {
         kmRow.style.display = "none";
       } else {
-        // Check if this kill is visible for the selected militia
-        const visibleFor = (kmRow.getAttribute("data-visible-for") || "").split(",").map(s => s.trim()).filter(Boolean);
-        if (visibleFor.length === 0 || visibleFor.includes(selectedMilitia)) {
-          kmRow.style.display = "";
-          hasVisibleHighsec = true;
-        } else {
-          kmRow.style.display = "none";
-        }
+        kmRow.style.display = "";
+        hasVisibleHighsec = true;
       }
     });
 
-    // Also ensure regular kill rows are visible (they might have been hidden)
+    // Regular kill rows always visible
     row.querySelectorAll('.killmail-row:not([data-source="highsec-station"])').forEach(kmRow => {
       kmRow.style.display = "";
     });
 
-    // If this system has only highsec kills and none are visible, hide the system row
-    if (hasVisibleHighsec === false && highsecRows.length > 0) {
+    // Hide system row if it has only highsec kills and none are visible
+    if (!hasVisibleHighsec && highsecRows.length > 0) {
       const hasRegularKills = row.querySelectorAll('.killmail-row:not([data-source="highsec-station"])').length > 0;
-      if (!hasRegularKills) {
-        row.style.display = "none";
-      } else {
-        row.style.display = "";
-      }
+      row.style.display = hasRegularKills ? "" : "none";
     } else {
       row.style.display = "";
     }
   });
 
-  // Colorize militia icon borders based on selected faction
-  if (selectedMilitia) {
-    const enemies = militiaEnemies[selectedMilitia] || [];
-    document.querySelectorAll(".militia-icon").forEach(icon => {
-      const militia = icon.getAttribute("data-militia");
-      icon.classList.remove("militia-friendly", "militia-enemy");
-      if (militia === selectedMilitia) {
-        icon.classList.add("militia-friendly");
-      } else if (enemies.includes(militia)) {
-        icon.classList.add("militia-enemy");
-      }
-    });
-  } else {
-    document.querySelectorAll(".militia-icon").forEach(icon => {
-      icon.classList.remove("militia-friendly", "militia-enemy");
-    });
-  }
+  // No client-side icon colorizing — server pre-applies militia-friendly/enemy classes
 }
 
 // Apply security filters based on checkbox states
@@ -3789,6 +3699,7 @@ function hideSetDestinationButtons() {
                 </a>
             </div>
             <div id="auth-logged-in" style="display: none;">
+                <span id="militia-faction-icon" style="display: none;"></span>
                 <img id="character-portrait" src="" alt="" style="display: none;">
                 <span id="character-name" style="color: #e0e0e0;"></span>
                 <a href="#" id="logout-button" style="color: #6ab7ff; text-decoration: none; cursor: pointer;">Logout</a>
@@ -3880,16 +3791,6 @@ function hideSetDestinationButtons() {
             <input type="checkbox" id="militia-highsec" checked>
             <span>Highsec</span>
         </label>
-    </div>
-    <div id="militia-selection" style="display:none">
-        <span class="militia-label">My militia:</span>
-        <button class="militia-btn militia-active" data-militia="" data-faction-id="0">None</button>
-        <button class="militia-btn" data-militia="caldari" data-faction-id="500001"><span class="militia-icon militia-icon--caldari"></span>Caldari</button>
-        <button class="militia-btn" data-militia="gallente" data-faction-id="500002"><span class="militia-icon militia-icon--gallente"></span>Gallente</button>
-        <button class="militia-btn" data-militia="amarr" data-faction-id="500003"><span class="militia-icon militia-icon--amarr"></span>Amarr</button>
-        <button class="militia-btn" data-militia="minmatar" data-faction-id="500004"><span class="militia-icon militia-icon--minmatar"></span>Minmatar</button>
-        <button class="militia-btn" data-militia="guristas" data-faction-id="500010"><span class="militia-icon militia-icon--guristas"></span>Guristas</button>
-        <button class="militia-btn" data-militia="angels" data-faction-id="500011"><span class="militia-icon militia-icon--angels"></span>Angels</button>
     </div>
     [[.InitialTableHTML]]
 </body>

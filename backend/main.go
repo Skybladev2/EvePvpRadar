@@ -583,7 +583,8 @@ var mockData bool // Use mock data when MOCK_DATA=1 or true
 type SSOSession struct {
 	CharacterID      int
 	CharacterName    string
-	MilitiaFactionID int // 0 = not enlisted, otherwise faction ID (500001-500011)
+	MilitiaFactionID int    // 0 = not enlisted, otherwise faction ID (500001-500011)
+	MilitiaShortName string // short name (e.g. "caldari") or "" if not enlisted
 	AccessToken      string // #nosec G117 -- OAuth field name, not a hardcoded secret
 	RefreshToken     string // #nosec G117 -- OAuth field name, not a hardcoded secret
 	ExpiresAt        time.Time
@@ -714,12 +715,14 @@ var (
 
 // Ready-to-render HTML fragments built in the background.
 // Requests serve the latest ready snapshot; when new data arrives we rebuild in background and swap atomically.
+var allFactionShortNames = []string{"", "caldari", "gallente", "amarr", "minmatar", "guristas", "angels"}
+
 var (
-	readyTablesMu          sync.RWMutex
-	readyNearTradeHubsHTML string
-	readyTheraCampsHTML    string
-	readyTablesBuilding    bool
-	readyTablesDirty       bool
+	readyTablesMu                sync.RWMutex
+	readyNearTradeHubsByFaction  map[string]string // keyed by MilitiaShortName ("" = non-militia)
+	readyTheraCampsHTML          string
+	readyTablesBuilding          bool
+	readyTablesDirty             bool
 )
 
 // invalidateIndexHTMLCache now marks table HTML as dirty and schedules background rebuild.
@@ -747,11 +750,11 @@ func rebuildReadyTablesHTML() {
 		campKills := getTheraCampKills()
 
 		// Collect attacker character IDs (only those shown in UI: up to 3 kills per system and up to 10 Thera camps)
-	sort.Slice(result, func(i, j int) bool { return result[i].Weight < result[j].Weight })
+		sort.Slice(result, func(i, j int) bool { return result[i].Weight < result[j].Weight })
 
-	var characterIDs []int
-	for _, system := range result {
-		for i := 0; i < 3 && i < len(system.RecentKills); i++ {
+		var characterIDs []int
+		for _, system := range result {
+			for i := 0; i < 3 && i < len(system.RecentKills); i++ {
 				for _, a := range system.RecentKills[i].Attackers {
 					if a.CharacterID != 0 {
 						characterIDs = append(characterIDs, a.CharacterID)
@@ -769,18 +772,22 @@ func rebuildReadyTablesHTML() {
 
 		characterNames, characterNameErrors := resolveCharacterNames(characterIDs) // single-attempt per character; failures render as missing
 
-		newNearTradeHubs := renderHTMLTableWithNames(result, "near_trade_hubs", characterNames, characterNameErrors)
+		// Render one faction-specific trade hub table per militia ("" = non-militia, no highsec).
+		newByFaction := make(map[string]string, len(allFactionShortNames))
+		for _, fsn := range allFactionShortNames {
+			newByFaction[fsn] = renderHTMLTableWithNames(result, "near_trade_hubs", characterNames, characterNameErrors, fsn)
+		}
 		newTheraCamps := renderTheraCampsHTMLWithNames(campKills, characterNames, characterNameErrors)
 
 		// Swap atomically. Preserve whether we became dirty while building so we can rebuild again.
 		readyTablesMu.Lock()
 		rebuildAgain := readyTablesDirty
-		readyNearTradeHubsHTML = newNearTradeHubs
+		readyNearTradeHubsByFaction = newByFaction
 		readyTheraCampsHTML = newTheraCamps
 		readyTablesDirty = false
 		readyTablesBuilding = rebuildAgain
 		readyTablesMu.Unlock()
-		log.Printf("Ready tables: rebuild completed (near_trade_hubs=%d bytes, thera_camps=%d bytes)", len(newNearTradeHubs), len(newTheraCamps))
+		log.Printf("Ready tables: rebuild completed (%d faction variants, thera_camps=%d bytes)", len(newByFaction), len(newTheraCamps))
 
 		// Force index HTML cache rebuild on next request so it picks up the new fragments.
 		indexHTMLCacheMu.Lock()
@@ -833,9 +840,9 @@ const ccpFooterHTML = `<footer id="ccp-disclaimer">EVE Online and the EVE logo a
 // Faction IDs for Faction Warfare
 const (
 	FactionCaldari  = 500001
-	FactionGallente = 500002
+	FactionMinmatar = 500002
 	FactionAmarr    = 500003
-	FactionMinmatar = 500004
+	FactionGallente = 500004
 	FactionGuristas = 500010
 	FactionAngels   = 500011
 )
@@ -3817,12 +3824,12 @@ func loadMockData(mw io.Writer) {
 		factionID int
 	}
 	highsecMocks := []highsecMock{
-		{50000001, "Mock-Highsec-Caldari", 500001},
-		{50000002, "Mock-Highsec-Gallente", 500002},
-		{50000003, "Mock-Highsec-Amarr", 500003},
-		{50000004, "Mock-Highsec-Minmatar", 500004},
-		{50000005, "Mock-Highsec-Guristas", 500010},
-		{50000006, "Mock-Highsec-Angels", 500011},
+		{50000001, "Mock-Highsec-Caldari", FactionCaldari},
+		{50000002, "Mock-Highsec-Gallente", FactionGallente},
+		{50000003, "Mock-Highsec-Amarr", FactionAmarr},
+		{50000004, "Mock-Highsec-Minmatar", FactionMinmatar},
+		{50000005, "Mock-Highsec-Guristas", FactionGuristas},
+		{50000006, "Mock-Highsec-Angels", FactionAngels},
 	}
 	highsecStationBaseID := 61000000
 	for i, hm := range highsecMocks {
@@ -3856,12 +3863,12 @@ func loadMockData(mw io.Writer) {
 	// Opposing pair = both factions are enemies (Caldari↔Gallente, Amarr↔Minmatar).
 	// Same faction or NPC-only = not opposing.
 	highsecSystemFactions := map[int][]int{
-		50000001: {500002, 500010, 0, 0}, // Caldari → Gallente+Guristas+NPCs → opposing ✓
-		50000002: {500001, 500010, 0, 0}, // Gallente → Caldari+Guristas+NPCs → opposing ✓
-		50000003: {500004, 500011, 0, 0}, // Amarr → Minmatar+Angels+NPCs → opposing ✓
-		50000004: {500003, 500011, 0, 0}, // Minmatar → Amarr+Angels+NPCs → opposing ✓
-		50000005: {500001, 500002, 0, 0}, // Guristas → Caldari+Gallente+NPCs → opposing ✓
-		50000006: {500003, 500004, 0, 0}, // Angels → Amarr+Minmatar+NPCs → opposing ✓
+		50000001: {FactionGallente, FactionGuristas, 0, 0}, // Caldari → Gallente+Guristas+NPCs
+		50000002: {FactionCaldari, FactionGuristas, 0, 0},  // Gallente → Caldari+Guristas+NPCs
+		50000003: {FactionMinmatar, FactionAngels, 0, 0},   // Amarr → Minmatar+Angels+NPCs
+		50000004: {FactionAmarr, FactionAngels, 0, 0},      // Minmatar → Amarr+Angels+NPCs
+		50000005: {FactionCaldari, FactionGallente, 0, 0},  // Guristas → Caldari+Gallente+NPCs
+		50000006: {FactionAmarr, FactionMinmatar, 0, 0},    // Angels → Amarr+Minmatar+NPCs
 	}
 
 	// Ensure Thera and Zarzakh systems exist in the systems list
@@ -5088,7 +5095,8 @@ func getNearTradeHubsResult() []SystemInRange {
 // renderHTMLTable renders the systems table as HTML without resolving character names.
 // (Used for contexts where we don't want to block on name lookups.)
 // renderHTMLTableWithNames renders the systems table as HTML, using pre-resolved character names.
-func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNames map[int]string, characterNameErrors map[int]string) string {
+// factionShortName is the viewing character's militia short name (e.g. "caldari") or "" for non-militia.
+func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNames map[int]string, characterNameErrors map[int]string, factionShortName string) string {
 	var html strings.Builder
 	html.WriteString("<table id='result'><thead><tr>")
 	showUedamaScoutIcon := isUedamaScoutLive()
@@ -5150,7 +5158,19 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 	}
 
 	for _, system := range systems {
-		if len(system.RecentKills) == 0 && len(system.HighsecKills) == 0 {
+		// Pre-filter highsec kills for this faction before the skip check
+		var visibleHighsec []CachedKillmail
+		if factionShortName != "" {
+			for _, hk := range system.HighsecKills {
+				for _, name := range strings.Split(hk.HighsecVisibleFor, ",") {
+					if strings.TrimSpace(name) == factionShortName {
+						visibleHighsec = append(visibleHighsec, hk)
+						break
+					}
+				}
+			}
+		}
+		if len(system.RecentKills) == 0 && len(visibleHighsec) == 0 {
 			continue
 		}
 		html.WriteString("<tr id='system-")
@@ -5511,7 +5531,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 				html.WriteString(" data-attacker-count='")
 				html.WriteString(strconv.Itoa(len(kill.Attackers)))
 				html.WriteString("'>")
-				renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, system.TradeHub)
+				renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, system.TradeHub, factionShortName)
 				html.WriteString("</div>")
 			}
 			if len(system.RecentKills) > 3 {
@@ -5540,20 +5560,20 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 					html.WriteString("' data-attacker-count='")
 					html.WriteString(strconv.Itoa(len(kill.Attackers)))
 					html.WriteString("'>")
-					renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, system.TradeHub)
+					renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, system.TradeHub, factionShortName)
 					html.WriteString("</div>")
 				}
 				html.WriteString("</details>")
 			}
 		}
-		// Highsec station kills — rendered with data-source and data-visible-for for client-side filtering
-		count := len(system.HighsecKills)
+		// Highsec station kills — render those visible for this faction (pre-filtered above)
+		count := len(visibleHighsec)
 		initial := count
 		if initial > 3 {
 			initial = 3
 		}
 		for i := 0; i < initial; i++ {
-			kill := system.HighsecKills[i]
+			kill := visibleHighsec[i]
 			html.WriteString("<div class='killmail-row' data-source='highsec-station' data-visible-for='")
 			html.WriteString(template.HTMLEscapeString(kill.HighsecVisibleFor))
 			html.WriteString("' data-order='")
@@ -5561,7 +5581,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 			html.WriteString("' data-attacker-count='")
 			html.WriteString(strconv.Itoa(len(kill.Attackers)))
 			html.WriteString("'>")
-			renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, system.TradeHub)
+			renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, system.TradeHub, factionShortName)
 			html.WriteString("</div>")
 		}
 		if count > 3 {
@@ -5584,7 +5604,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 			html.WriteString("</span>")
 			html.WriteString("</summary>")
 			for i := 3; i < count; i++ {
-				kill := system.HighsecKills[i]
+				kill := visibleHighsec[i]
 				html.WriteString("<div class='killmail-row' data-source='highsec-station' data-visible-for='")
 				html.WriteString(template.HTMLEscapeString(kill.HighsecVisibleFor))
 				html.WriteString("' data-order='")
@@ -5592,7 +5612,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 				html.WriteString("' data-attacker-count='")
 				html.WriteString(strconv.Itoa(len(kill.Attackers)))
 				html.WriteString("'>")
-				renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, system.TradeHub)
+				renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, pilotMultiSystem, systemsInResult, system.TradeHub, factionShortName)
 				html.WriteString("</div>")
 			}
 			html.WriteString("</details>")
@@ -5632,7 +5652,7 @@ func renderTheraCampsHTMLWithNames(campKills []CachedKillmail, characterNames ma
 		html.WriteString(strconv.Itoa(i))
 		html.WriteString("'>")
 		// Thera camps are rendered independently; we don't compute multi-system highlights here.
-		renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, nil, nil, "")
+		renderKillmailHTML(&html, &kill, types, characterNames, characterNameErrors, nil, nil, "", "")
 		html.WriteString("</div>")
 	}
 	html.WriteString("</div></div></div>")
@@ -5664,14 +5684,30 @@ func isMilitiaFaction(factionID int) bool {
 	return ok
 }
 
-// entityMilitiaHTML returns the militia icon HTML for an entity with the given faction ID,
-// or placeholder if not a militia faction. No server-side highlighting — JS reads data-militia for borders.
-func entityMilitiaHTML(factionID int) string {
+// entityMilitiaHTML returns the militia icon HTML for an entity with the given faction ID.
+// When referenceShortName is empty (unauthenticated / no militia), returns nothing.
+// When non-empty, renders the icon (or placeholder for unknown factions) with
+// militia-friendly or militia-enemy classes.
+func entityMilitiaHTML(factionID int, referenceShortName string) string {
+	if referenceShortName == "" {
+		return ""
+	}
 	f, ok := factionByID[factionID]
 	if !ok {
 		return "<span class='militia-icon-placeholder'></span>"
 	}
-	return fmt.Sprintf("<span class='militia-icon militia-icon--%s' data-militia='%s' data-tooltip='%s'></span>", f.ShortName, f.ShortName, f.Name)
+	extra := ""
+	if f.ShortName == referenceShortName {
+		extra = " militia-friendly"
+	} else if ref, ok := factionByShortName[referenceShortName]; ok {
+		for _, eid := range ref.EnemyIDs {
+			if e, ok := factionByID[eid]; ok && e.ShortName == f.ShortName {
+				extra = " militia-enemy"
+				break
+			}
+		}
+	}
+	return fmt.Sprintf("<span class='militia-icon militia-icon--%s%s' data-militia='%s' data-tooltip='%s'></span>", f.ShortName, extra, f.ShortName, f.Name)
 }
 
 // mergeHighsecKills merges highsec station kills into the result. No faction filter — all eligible kills included.
@@ -5821,6 +5857,7 @@ func renderKillmailHTML(
 	pilotMultiSystem map[int]bool,
 	systemsInResult map[int]bool,
 	tradeHub string,
+	factionShortName string, // viewing character's militia shortName or ""; used for icon colorizing
 ) {
 	// Grey monochrome pilot icons (SVG keeps them consistent across OS/font rendering).
 	// Running human icon from static/running-human.svg (repeat pilots across multiple systems).
@@ -5963,7 +6000,7 @@ func renderKillmailHTML(
 		html.WriteString("<tr>")
 		// Faction icon column
 		html.WriteString("<td class='attacker-faction'>")
-		html.WriteString(entityMilitiaHTML(attacker.FactionID))
+		html.WriteString(entityMilitiaHTML(attacker.FactionID, factionShortName))
 		html.WriteString("</td>")
 
 		// Ship icon column
@@ -6607,6 +6644,9 @@ func ssoCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to fetch militia for character %d: %v", characterID, err)
 	} else {
 		session.MilitiaFactionID = factionID
+		if f, ok := factionByID[factionID]; ok {
+			session.MilitiaShortName = f.ShortName
+		}
 	}
 
 	// Start background token refresh for this session
@@ -6636,17 +6676,19 @@ func fetchCharacterMilitia(accessToken string, characterID int) (int, error) {
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode == http.StatusNotFound {
 		return 0, nil // Character not enlisted in FW
 	}
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("ESI returned status %d", resp.StatusCode)
+		return 0, fmt.Errorf("ESI returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var result struct {
 		FactionID int `json:"faction_id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		return 0, err
 	}
 	return result.FactionID, nil
@@ -6947,7 +6989,7 @@ func proximityHandler(w http.ResponseWriter, r *http.Request) {
 	// Prepend meta div with start system for frontend to display location; escape system name for HTML safety
 	meta := fmt.Sprintf(`<div id="proximity-meta" data-system-id="%d" data-system-name="%s" style="display:none"></div>`,
 		systemID, html.EscapeString(systemName))
-	html := meta + renderHTMLTableWithNames(result, "proximity", characterNames, characterNameErrors)
+	html := meta + renderHTMLTableWithNames(result, "proximity", characterNames, characterNameErrors, session.MilitiaShortName)
 	_, _ = w.Write([]byte(html))
 }
 
@@ -6987,13 +7029,13 @@ func checkCharacterOnline(session *SSOSession) (bool, error) {
 	return onlineData.Online, nil
 }
 
-// ssoMilitiaHandler returns the character's FW militia faction ID.
+// ssoMilitiaHandler returns the character's FW militia faction ID and short name.
 // Lazy-fetches from ESI on first call if not already cached in the session.
 func ssoMilitiaHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	session := getSession(r)
 	if session == nil {
-		json.NewEncoder(w).Encode(map[string]int{"militiaFactionID": 0})
+		json.NewEncoder(w).Encode(map[string]string{"militiaShortName": ""})
 		return
 	}
 	if session.MilitiaFactionID == 0 {
@@ -7002,9 +7044,12 @@ func ssoMilitiaHandler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("ssoMilitiaHandler: failed to fetch militia for %d: %v", session.CharacterID, err)
 		} else {
 			session.MilitiaFactionID = factionID
+			if f, ok := factionByID[factionID]; ok {
+				session.MilitiaShortName = f.ShortName
+			}
 		}
 	}
-	json.NewEncoder(w).Encode(map[string]int{"militiaFactionID": session.MilitiaFactionID})
+	json.NewEncoder(w).Encode(map[string]string{"militiaShortName": session.MilitiaShortName})
 }
 
 // ssoWaypointHandler sets a waypoint destination in EVE Online via ESI API.
@@ -7337,8 +7382,16 @@ func main() {
 	http.HandleFunc("/api/near_trade_hubs.html", gzipHandler(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Content-Type", "text/html")
+		factionShortName := ""
+		if session := getSession(r); session != nil {
+			factionShortName = session.MilitiaShortName
+		}
 		readyTablesMu.RLock()
-		html := readyNearTradeHubsHTML
+		html := readyNearTradeHubsByFaction[factionShortName]
+		if html == "" {
+			// Fallback to non-faction if this variant isn't cached
+			html = readyNearTradeHubsByFaction[""]
+		}
 		readyTablesMu.RUnlock()
 		if html == "" {
 			// Not ready yet; trigger background rebuild and return minimal HTML.
@@ -7447,7 +7500,10 @@ func main() {
 			initialResult := getNearTradeHubsResult()
 			readyTablesMu.RLock()
 			initialTable := readyTheraCampsHTML
-			nearHTML := readyNearTradeHubsHTML
+			nearHTML := readyNearTradeHubsByFaction[session.MilitiaShortName]
+			if nearHTML == "" {
+				nearHTML = readyNearTradeHubsByFaction[""]
+			}
 			readyTablesMu.RUnlock()
 			if initialTable == "" || nearHTML == "" {
 				// If not ready yet, kick off background rebuild; page can load without the table.
@@ -7463,10 +7519,11 @@ func main() {
 				initialTable += "<div id=\"result-container\">" + ccpFooterHTML + "</div>"
 			}
 			authData := map[string]interface{}{
-				"authenticated":     true,
-				"characterID":       session.CharacterID,
-				"characterName":     session.CharacterName,
-				"militiaFactionID":  session.MilitiaFactionID,
+				"authenticated":      true,
+				"characterID":        session.CharacterID,
+				"characterName":      session.CharacterName,
+				"militiaFactionID":   session.MilitiaFactionID,
+				"militiaShortName":   session.MilitiaShortName,
 			}
 			authJSON, _ := json.Marshal(authData)
 			authBase64 := base64.StdEncoding.EncodeToString(authJSON)
@@ -7552,7 +7609,7 @@ func main() {
 		initialResult := getNearTradeHubsResult()
 		readyTablesMu.RLock()
 		initialTable := readyTheraCampsHTML
-		nearHTML := readyNearTradeHubsHTML
+		nearHTML := readyNearTradeHubsByFaction[""]
 		readyTablesMu.RUnlock()
 		if initialTable == "" || nearHTML == "" {
 			invalidateIndexHTMLCache()
