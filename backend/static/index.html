@@ -1309,6 +1309,23 @@
             background-repeat: no-repeat;
             flex-shrink: 0;
         }
+        /* Tooltip for clock icon */
+        [data-tooltip]:hover:after {
+            content: attr(data-tooltip);
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+            font-size: 12px;
+            z-index: 1000;
+            pointer-events: none;
+            margin-top: 4px;
+        }
         /* Militia icons in killmail rows */
         .militia-icon-placeholder {
             display: inline-block;
@@ -1706,12 +1723,22 @@ function applyAuthFromPage() {
     }
     // Show faction icon if character has a militia
     const factionIcon = document.getElementById("militia-faction-icon");
+    const clockIcon = document.getElementById("militia-clock-icon");
     const militiaShortName = data.militiaShortName || "";
+    const showMilitia = !!militiaShortName;
     if (factionIcon) {
-      factionIcon.style.display = militiaShortName ? "inline-block" : "none";
+      factionIcon.style.display = showMilitia ? "inline-block" : "none";
       if (militiaShortName) {
         factionIcon.className = "militia-icon militia-icon--" + militiaShortName;
       }
+    }
+    // Clock tooltip — visible when logged in unless user dismissed it
+    if (clockIcon) {
+      clockIcon.style.display = localStorage.getItem("militia_clock_dismissed") === "1" ? "none" : "inline";
+      clockIcon.onclick = function() {
+        this.style.display = "none";
+        localStorage.setItem("militia_clock_dismissed", "1");
+      };
     }
     showSetDestinationButtons();
   } else {
@@ -3699,6 +3726,7 @@ function hideSetDestinationButtons() {
                 </a>
             </div>
             <div id="auth-logged-in" style="display: none;">
+                <span id="militia-clock-icon" style="display: none; cursor: pointer; margin-right: 4px; position: relative;" data-tooltip="Character militia updates once a day after downtime">🕐</span>
                 <span id="militia-faction-icon" style="display: none;"></span>
                 <img id="character-portrait" src="" alt="" style="display: none;">
                 <span id="character-name" style="color: #e0e0e0;"></span>
