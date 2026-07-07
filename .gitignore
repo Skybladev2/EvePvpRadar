@@ -1,5 +1,6 @@
 backend/cache
 backend/sde/
+backend/generated/
 backend/eve-pvp-search
 backend/*.exe
 backend/test_build
