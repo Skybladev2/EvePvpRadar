@@ -6,6 +6,7 @@ WORKDIR /app
 
 # Pure Go only: build fails if any dependency requires cgo.
 ENV CGO_ENABLED=0
+ENV GOPROXY=https://goproxy.cn,https://proxy.golang.org,https://goproxy.io,direct
 
 COPY backend/go.*  /app/
 RUN go mod download
@@ -25,10 +26,10 @@ RUN test -n "$IMAGE_TAG" || (echo "IMAGE_TAG build-arg is required" && exit 1)
 # Pin Go CLI tool versions so Docker builds don't auto-update to "too new" releases.
 # You can override these build args in `docker compose build`.
 ARG STATICCHECK_VERSION=v0.7.0
-ARG GOVULNCHECK_VERSION=v1.1.4
+ARG OSV_SCANNER_VERSION=v1
 
 RUN go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./... && \
-    go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./... && \
+    go run github.com/google/osv-scanner/cmd/osv-scanner@${OSV_SCANNER_VERSION} --lockfile go.mod && \
     go build -ldflags="-s -w -X main.commit=$IMAGE_TAG" -o backend .
 
 # Runtime stage (scratch: empty image, minimal size)
