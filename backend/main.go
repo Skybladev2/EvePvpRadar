@@ -5336,7 +5336,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 
 		// Add warning sign if route has kills
 		if routeHasKills {
-			html.WriteString("<span class='route-warning-sign'>⚠</span> ")
+			html.WriteString("<span class='route-warning-sign' data-tooltip='The route contains gatecamps'>⚠</span> ")
 		}
 
 		html.WriteString(strconv.Itoa(system.Dist))
@@ -5460,7 +5460,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 					html.WriteString(template.HTMLEscapeString(routeSystem.SystemName))
 					html.WriteString("</a>")
 					if hasKills {
-						html.WriteString(" ⚠")
+						html.WriteString(" <span class='route-warning-sign' data-tooltip='This system has recent kills'>⚠</span>")
 					}
 				} else if hasKills && systemInResult {
 					// If system has kills and is in the result set, make it a clickable link to the table row
@@ -5468,14 +5468,14 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 					html.WriteString(strconv.Itoa(routeSystem.SystemID))
 					html.WriteString("' class='route-system-link' title='This system has recent kills - click to jump to it in the table'>")
 					html.WriteString(template.HTMLEscapeString(routeSystem.SystemName))
-					html.WriteString(" ⚠")
 					html.WriteString("</a>")
+					html.WriteString(" <span class='route-warning-sign' data-tooltip='This system has recent kills – click to jump to it in the table'>⚠</span>")
 				} else if hasKills {
 					// System has kills but is not in result set - just mark it visually
 					html.WriteString("<span class='route-system-link' title='This system has recent kills (not shown in current results)'>")
 					html.WriteString(template.HTMLEscapeString(routeSystem.SystemName))
-					html.WriteString(" ⚠")
 					html.WriteString("</span>")
+					html.WriteString(" <span class='route-warning-sign' data-tooltip='This system has recent kills (not shown in current results)'>⚠</span>")
 				} else {
 					html.WriteString(template.HTMLEscapeString(routeSystem.SystemName))
 				}
