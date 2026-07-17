@@ -349,11 +349,29 @@
             fill: #4fc3f7 !important;
             stroke: #4fc3f7 !important;
         }
+        /* Generic tooltip — placed before specific rules so they win by source order */
+        [data-tooltip]:hover:after {
+            content: attr(data-tooltip);
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+            font-size: 12px;
+            z-index: 1000;
+            pointer-events: none;
+            margin-top: 4px;
+        }
         .pilot-link[data-tooltip]::after {
             content: attr(data-tooltip);
             position: absolute;
             left: 50%;
             bottom: calc(100% + 6px);
+            top: auto;
             transform: translateX(-50%);
             padding: 0.25rem 0.5rem;
             background-color: #2a2a2a;
@@ -370,6 +388,7 @@
             opacity: 0;
             transition: opacity 0s;
             z-index: 1000;
+            margin-top: 0;
         }
         .pilot-link[data-tooltip]:hover::after {
             opacity: 1;
@@ -727,7 +746,9 @@
             position: absolute;
             left: 100%;
             top: -8px;
+            transform: none;
             margin-left: 0.625rem;
+            margin-top: 0;
             padding: 0.5rem 0.75rem;
             background-color: #2a2a2a;
             color: #e0e0e0;
@@ -775,7 +796,9 @@
             position: absolute;
             left: 100%;
             top: -8px;
+            transform: none;
             margin-left: 0.625rem;
+            margin-top: 0;
             padding: 0.5rem 0.75rem;
             background-color: #2a2a2a;
             color: #e0e0e0;
@@ -835,6 +858,7 @@
             position: absolute;
             left: 50%;
             bottom: calc(100% + 6px);
+            top: auto;
             transform: translateX(-50%);
             padding: 0.25rem 0.5rem;
             background-color: #2a2a2a;
@@ -849,6 +873,7 @@
             opacity: 0;
             transition: opacity 0s;
             z-index: 1000;
+            margin-top: 0;
         }
         .ship-type-icon[data-tooltip]:hover::after {
             opacity: 1;
@@ -1309,23 +1334,7 @@
             background-repeat: no-repeat;
             flex-shrink: 0;
         }
-        /* Tooltip for clock icon */
-        [data-tooltip]:hover:after {
-            content: attr(data-tooltip);
-            position: absolute;
-            top: 100%;
-            left: 50%;
-            transform: translateX(-50%);
-            background: #333;
-            color: #fff;
-            padding: 4px 8px;
-            border-radius: 4px;
-            white-space: nowrap;
-            font-size: 12px;
-            z-index: 1000;
-            pointer-events: none;
-            margin-top: 4px;
-        }
+
         /* Militia icons in killmail rows */
         .militia-icon-placeholder {
             display: inline-block;
@@ -1360,6 +1369,7 @@
             position: absolute;
             left: 50%;
             bottom: calc(100% + 6px);
+            top: auto;
             transform: translateX(-50%);
             padding: 0.25rem 0.5rem;
             background-color: #2a2a2a;
@@ -1374,6 +1384,7 @@
             opacity: 0;
             transition: opacity 0s;
             z-index: 1000;
+            margin-top: 0;
         }
         .militia-icon[data-tooltip]:hover::after {
             opacity: 1;
