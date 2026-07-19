@@ -8,6 +8,7 @@
     <meta name="container-tag" content="[[.ContainerTag]]">
     [[.ShipIconsStyle]]
     [[.MilitiaIconsStyle]]
+    [[.TradeHubFilterCSS]]
     <style>
         html {
             font-size: 16px; /* Base font size for FullHD (1920px) */
@@ -891,7 +892,6 @@
             background-color: #2a2a2a;
             border: 1px solid #444;
             border-radius: 4px;
-            display: none;
             color: #e0e0e0;
         }
         #jump-clone-stations h2 {
@@ -1281,6 +1281,11 @@
         #result tr.filtered-out {
             display: none;
         }
+        /* CSS-based security class filtering (no JS needed) */
+        body:has(#filter-lowsec:not(:checked)) #result tr[data-sec="lowsec"],
+        body:has(#filter-nullsec:not(:checked)) #result tr[data-sec="nullsec"] {
+            display: none !important;
+        }
         /* Filter indicator icon pinned at top-left of table */
         #filter-indicator {
             display: none;
@@ -1634,14 +1639,11 @@ document.addEventListener('DOMContentLoaded', () => {
     window.history.replaceState({}, document.title, window.location.pathname);
     debugLog("CLIENT: Detected successful authentication redirect");
   }
-  
+
+  handlePageReload();
   initializeApplication().catch(error => {
     console.error("CLIENT: Initialization failed:", error);
   });
-  
-  // Handle page reload UI issues
-  handlePageReload();
-  
 });
 
 function handlePageReload() {
@@ -1681,6 +1683,7 @@ async function initializeApplication() {
     }
     // Initialize mode selection (for proximity mode this may show login popup or load table)
     await handleModeChange();
+    restoreFilterState();
     initialLoadDone = true; // Allow fetch when user later switches to near_trade_hubs from another mode
     // Ensure buttons are shown/hidden correctly after mode change (in case cached data was restored)
     // Use requestAnimationFrame to ensure DOM updates are complete
@@ -1832,7 +1835,7 @@ function bindEventHandlers() {
   bindJumpCloneDestinationButtons();
   document.querySelectorAll(".trade-hub-checkbox").forEach(cb => {
     cb.addEventListener("change", function() {
-      const term = this.getAttribute("data-trade-hub");
+      const term = (this.getAttribute("data-trade-hub") || "").toLowerCase();
       if (!term) return;
       if (this.checked) {
         hiddenTradeHubs.delete(term);
@@ -2836,7 +2839,7 @@ function saveFilterState() {
     filterNullsec: filterNullsec ? filterNullsec.checked : true,
     filterGatecamps: filterGatecamps ? filterGatecamps.checked : false,
     maxAttackers: maxAttackersLimit,
-    hiddenTradeHubs: Array.from(hiddenTradeHubs)
+    hiddenTradeHubs: Array.from(hiddenTradeHubs).map(h => String(h).toLowerCase())
   };
   try {
     localStorage.setItem(filterStateKey, JSON.stringify(state));
@@ -2854,11 +2857,18 @@ function restoreFilterState() {
     if (filterLowsec && state.filterLowsec !== undefined) filterLowsec.checked = state.filterLowsec;
     if (filterNullsec && state.filterNullsec !== undefined) filterNullsec.checked = state.filterNullsec;
     if (filterGatecamps && state.filterGatecamps !== undefined) filterGatecamps.checked = state.filterGatecamps;
-    if (state.maxAttackers !== undefined) setMaxAttackersLimit(state.maxAttackers);
+    if (state.maxAttackers !== undefined) {
+      maxAttackersLimit = state.maxAttackers;
+      const display = document.getElementById("max-attackers-display");
+      if (display) {
+        display.textContent = maxAttackersLimit < 1 ? "unbound" : String(maxAttackersLimit);
+      }
+    }
     if (Array.isArray(state.hiddenTradeHubs)) {
-      hiddenTradeHubs = new Set(state.hiddenTradeHubs);
+      hiddenTradeHubs = new Set(state.hiddenTradeHubs.map(h => String(h).toLowerCase()));
       syncTradeHubCheckboxes();
     }
+    applySecurityFilters();
   } catch (e) {}
 }
 
@@ -3230,16 +3240,11 @@ function applyMilitiaFilter() {
 }
 
 // Apply security filters based on checkbox states
+// Lowsec, nullsec, and trade hub row visibility is handled by CSS :has() rules.
+// This function handles pilot-only, gatecamps, max attackers (JS class-based)
+// and counts all hidden rows for the filter indicator.
 function applySecurityFilters() {
   applyMilitiaFilter();
-  const resultTable = document.getElementById("result");
-  if (!resultTable) {
-    updateGatecampFilterHintIconsVisibility(false);
-    return;
-  }
-
-  const checkedMode = document.querySelector("input[name='mode']:checked");
-  const mode = checkedMode ? checkedMode.value : null;
 
   const filterLowsec = document.getElementById("filter-lowsec");
   const filterNullsec = document.getElementById("filter-nullsec");
@@ -3247,94 +3252,103 @@ function applySecurityFilters() {
   const showLowsec = filterLowsec ? filterLowsec.checked : true;
   const showNullsec = filterNullsec ? filterNullsec.checked : true;
   const hideGatecamps = filterGatecamps ? filterGatecamps.checked : false;
+
+  const checkedMode = document.querySelector("input[name='mode']:checked");
+  const mode = checkedMode ? checkedMode.value : null;
   const hasHiddenHubs = mode === "near_trade_hubs" && hiddenTradeHubs.size > 0;
 
-  // Fast path: no filters active — clear all rows and exit
-  if (showLowsec && showNullsec && !hideGatecamps && !hasHiddenHubs && maxAttackersLimit < 1 && pilotOnlyCharacterIds.size === 0) {
-    for (const row of resultTable.querySelectorAll("tbody tr.filtered-out")) {
-      row.classList.remove("filtered-out");
-    }
-    updateFilterIndicator({ lowsec: 0, nullsec: 0, pilot: 0, tradeHub: 0, gatecamps: 0, maxAttackers: 0 });
+  const resultTable = document.getElementById("result");
+  if (!resultTable) {
     updateGatecampFilterHintIconsVisibility(false);
+    saveFilterState();
     return;
   }
 
-  // Keep trade hub filter icon state in sync with the current filter state.
-  resultTable.querySelectorAll(".trade-hub-filter-btn").forEach(btn => {
-    const btnTerm = (btn.getAttribute("data-trade-hub-filter") || "").trim().toLowerCase();
-    const isActive = hasHiddenHubs && !hiddenTradeHubs.has(btnTerm);
-    btn.classList.toggle("active", isActive);
-    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
-  });
+  // Count rows hidden by CSS (lowsec, nullsec, trade hubs) for the indicator.
+  let hiddenByLowsec = 0;
+  let hiddenByNullsec = 0;
+  let hiddenByTradeHub = 0;
+  if (!showLowsec) {
+    hiddenByLowsec = resultTable.querySelectorAll('tbody tr[data-sec="lowsec"]').length;
+  }
+  if (!showNullsec) {
+    hiddenByNullsec = resultTable.querySelectorAll('tbody tr[data-sec="nullsec"]').length;
+  }
+  if (hasHiddenHubs) {
+    resultTable.querySelectorAll("tbody tr[data-trade-hub-row]").forEach(row => {
+      const name = (row.getAttribute("data-trade-hub-row") || "").trim().toLowerCase();
+      if (name && hiddenTradeHubs.has(name)) hiddenByTradeHub++;
+    });
+  }
 
+  if (mode === "near_trade_hubs") {
+    resultTable.querySelectorAll(".trade-hub-filter-btn").forEach(btn => {
+      const btnTerm = (btn.getAttribute("data-trade-hub-filter") || "").trim().toLowerCase();
+      const isActive = hasHiddenHubs && !hiddenTradeHubs.has(btnTerm);
+      btn.classList.toggle("active", isActive);
+      btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+  }
+
+  let hiddenByPilot = 0;
+  let hiddenByGatecamps = 0;
+  let hiddenByMaxAttackers = 0;
   let gatecampHidSelectedPilotRows = false;
   const hiddenSystemsForSelectedPilots = new Set();
 
-  // Independent counters for each filter type (for the indicator tooltip)
-  let hiddenByLowsec = 0;
-  let hiddenByNullsec = 0;
-  let hiddenByPilot = 0;
-  let hiddenByTradeHub = 0;
-  let hiddenByGatecamps = 0;
-  let hiddenByMaxAttackers = 0;
+  const jsFiltersActive = hideGatecamps || maxAttackersLimit >= 1 || pilotOnlyCharacterIds.size > 0;
 
-  const rows = resultTable.querySelectorAll("tbody tr");
-  rows.forEach(row => {
-    row.classList.remove("filtered-out");
-    let shouldHide = false;
-
-    if (!shouldHide && row.classList.contains("system-lowsec") && !showLowsec) { hiddenByLowsec++; shouldHide = true; }
-    if (!shouldHide && row.classList.contains("system-nullsec") && !showNullsec) { hiddenByNullsec++; shouldHide = true; }
-
-    if (!shouldHide && pilotOnlyCharacterIds.size > 0) {
-      let anyMatch = false;
-      for (const cid of pilotOnlyCharacterIds) {
-        if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) { anyMatch = true; break; }
-      }
-      if (!anyMatch) { hiddenByPilot++; shouldHide = true; }
+  if (!jsFiltersActive) {
+    for (const row of resultTable.querySelectorAll("tbody tr.filtered-out")) {
+      row.classList.remove("filtered-out");
     }
+  } else {
+    resultTable.querySelectorAll("tbody tr").forEach(row => {
+      row.classList.remove("filtered-out");
+      let shouldHide = false;
 
-    if (!shouldHide && hasHiddenHubs) {
-      const cell = row.querySelector("td[data-trade-hub]");
-      if (cell) {
-        const name = (cell.getAttribute("data-trade-hub") || "").trim().toLowerCase();
-        if (name && hiddenTradeHubs.has(name)) { hiddenByTradeHub++; shouldHide = true; }
+      if (!shouldHide && pilotOnlyCharacterIds.size > 0) {
+        let anyMatch = false;
+        for (const cid of pilotOnlyCharacterIds) {
+          if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) { anyMatch = true; break; }
+        }
+        if (!anyMatch) { hiddenByPilot++; shouldHide = true; }
       }
-    }
 
-    if (!shouldHide && hideGatecamps) {
-      const cells = row.querySelectorAll("td");
-      for (let i = 0; i < cells.length; i++) {
-        if (cells[i].querySelector(".distance-value")) {
-          if (cells[i].querySelector(".route-warning-sign")) {
-            hiddenByGatecamps++;
-            shouldHide = true;
-            if (pilotOnlyCharacterIds.size > 0) {
-              for (const cid of pilotOnlyCharacterIds) {
-                if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
-                  gatecampHidSelectedPilotRows = true;
-                  const systemName = getRowSystemDisplayName(row);
-                  if (systemName) hiddenSystemsForSelectedPilots.add(systemName);
-                  break;
+      if (!shouldHide && hideGatecamps) {
+        const cells = row.querySelectorAll("td");
+        for (let i = 0; i < cells.length; i++) {
+          if (cells[i].querySelector(".distance-value")) {
+            if (cells[i].querySelector(".route-warning-sign")) {
+              hiddenByGatecamps++;
+              shouldHide = true;
+              if (pilotOnlyCharacterIds.size > 0) {
+                for (const cid of pilotOnlyCharacterIds) {
+                  if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
+                    gatecampHidSelectedPilotRows = true;
+                    const systemName = getRowSystemDisplayName(row);
+                    if (systemName) hiddenSystemsForSelectedPilots.add(systemName);
+                    break;
+                  }
                 }
               }
             }
+            break;
           }
-          break;
         }
       }
-    }
 
-    if (!shouldHide && maxAttackersLimit > 0) {
-      const kmRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
-      for (const km of kmRows) {
-        const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
-        if (n > maxAttackersLimit) { hiddenByMaxAttackers++; shouldHide = true; break; }
+      if (!shouldHide && maxAttackersLimit > 0) {
+        const kmRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
+        for (const km of kmRows) {
+          const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
+          if (n > maxAttackersLimit) { hiddenByMaxAttackers++; shouldHide = true; break; }
+        }
       }
-    }
 
-    if (shouldHide) row.classList.add("filtered-out");
-  });
+      if (shouldHide) row.classList.add("filtered-out");
+    });
+  }
 
   updateFilterIndicator({
     lowsec: hiddenByLowsec,
@@ -3352,7 +3366,7 @@ function applySecurityFilters() {
 
 function syncTradeHubCheckboxes() {
   document.querySelectorAll(".trade-hub-checkbox").forEach(cb => {
-    const term = cb.getAttribute("data-trade-hub");
+    const term = (cb.getAttribute("data-trade-hub") || "").toLowerCase();
     if (term) {
       cb.checked = !hiddenTradeHubs.has(term);
     }
@@ -3749,7 +3763,7 @@ function hideSetDestinationButtons() {
             </div>
         </div>
     </header>
-    <div id="jump-clone-stations" class="collapsed">
+    <div id="jump-clone-stations">
         <h2>
             <span class="toggle-icon">▼</span>
             <span>Trade hubs</span>
@@ -3835,6 +3849,33 @@ function hideSetDestinationButtons() {
             <span>Highsec</span>
         </label>
     </div>
+    <script>
+    // Restore saved filter checkbox states before the results table is parsed (CSS :has() filters).
+    (function() {
+      try {
+        var saved = localStorage.getItem('evePvpSearchFilters');
+        if (!saved) return;
+        var state = JSON.parse(saved);
+        var fl = document.getElementById('filter-lowsec');
+        var fn = document.getElementById('filter-nullsec');
+        var fg = document.getElementById('filter-gatecamps');
+        if (fl && state.filterLowsec !== undefined) fl.checked = state.filterLowsec;
+        if (fn && state.filterNullsec !== undefined) fn.checked = state.filterNullsec;
+        if (fg && state.filterGatecamps !== undefined) fg.checked = state.filterGatecamps;
+        if (state.maxAttackers !== undefined) {
+          var display = document.getElementById('max-attackers-display');
+          if (display) display.textContent = state.maxAttackers < 1 ? 'unbound' : String(state.maxAttackers);
+        }
+        var hubs = Array.isArray(state.hiddenTradeHubs) ? state.hiddenTradeHubs : [];
+        var hiddenSet = {};
+        for (var i = 0; i < hubs.length; i++) hiddenSet[String(hubs[i]).toLowerCase()] = true;
+        document.querySelectorAll('.trade-hub-checkbox').forEach(function(cb) {
+          var t = (cb.getAttribute('data-trade-hub') || '').toLowerCase();
+          if (t && hiddenSet[t]) cb.checked = false;
+        });
+      } catch(e) {}
+    })();
+    </script>
     [[.InitialTableHTML]]
 </body>
 </html>

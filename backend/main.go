@@ -4966,6 +4966,29 @@ func getHubsClosestJumpClonesData() []HubClosestStationRow {
 	return result
 }
 
+// renderTradeHubFilterCSS returns CSS :has() rules for trade hub row visibility, one per hub.
+func renderTradeHubFilterCSS() template.HTML {
+	rows := getHubsClosestJumpClonesData()
+	if len(rows) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<style>")
+	for _, row := range rows {
+		hub := template.HTMLEscapeString(strings.ToLower(row.HubName))
+		if hub == "" {
+			continue
+		}
+		b.WriteString("body:has(.trade-hub-checkbox[data-trade-hub=\"")
+		b.WriteString(hub)
+		b.WriteString("\"]:not(:checked)) tr[data-trade-hub-row=\"")
+		b.WriteString(hub)
+		b.WriteString("\"]{display:none!important;}")
+	}
+	b.WriteString("</style>")
+	return template.HTML(b.String()) // #nosec G203 -- server-generated CSS
+}
+
 // renderJumpCloneTableHTML returns the tbody rows HTML for the jump clone table (server-rendered)
 func renderJumpCloneTableHTML() string {
 	rows := getHubsClosestJumpClonesData()
@@ -5173,16 +5196,6 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 		if len(system.RecentKills) == 0 && len(visibleHighsec) == 0 {
 			continue
 		}
-		html.WriteString("<tr id='system-")
-		html.WriteString(strconv.Itoa(system.SystemID))
-		html.WriteString("' data-system='")
-		html.WriteString(strconv.Itoa(system.SystemID))
-		if mode == "near_trade_hubs" {
-			html.WriteString("' data-trade-hub-row='")
-			html.WriteString(template.HTMLEscapeString(system.TradeHub))
-		}
-		html.WriteString("'>")
-
 		securityValue := system.Security
 		displayValue := displayEveSecurityForUI(securityValue)
 
@@ -5191,6 +5204,26 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 		if displayFormatted == "-0.0" {
 			displayFormatted = "0.0"
 		}
+
+		// Security category for CSS-based filtering
+		secCat := "highsec"
+		if displayValue <= 0.0 {
+			secCat = "nullsec"
+		} else if displayValue < 0.45 {
+			secCat = "lowsec"
+		}
+
+		html.WriteString("<tr id='system-")
+		html.WriteString(strconv.Itoa(system.SystemID))
+		html.WriteString("' data-system='")
+		html.WriteString(strconv.Itoa(system.SystemID))
+		if mode == "near_trade_hubs" {
+			html.WriteString("' data-trade-hub-row='")
+			html.WriteString(template.HTMLEscapeString(strings.ToLower(system.TradeHub)))
+		}
+		html.WriteString("' data-sec='")
+		html.WriteString(secCat)
+		html.WriteString("'>")
 
 		html.WriteString("<td data-label='System' data-security='")
 		html.WriteString(displayFormatted)
@@ -7497,7 +7530,6 @@ func main() {
 		if session != nil {
 			// Authenticated: always build HTML with per-user auth data (no cache).
 			jumpCloneBody := renderJumpCloneTableHTML()
-			initialResult := getNearTradeHubsResult()
 			readyTablesMu.RLock()
 			initialTable := readyTheraCampsHTML
 			nearHTML := readyNearTradeHubsByFaction[session.MilitiaShortName]
@@ -7509,12 +7541,8 @@ func main() {
 				// If not ready yet, kick off background rebuild; page can load without the table.
 				invalidateIndexHTMLCache()
 			}
-			if len(initialResult) > 0 {
-				if nearHTML != "" {
-					initialTable += "<div id=\"result-container\">" + nearHTML + ccpFooterHTML + "</div>"
-				} else {
-					initialTable += "<div id=\"result-container\">" + ccpFooterHTML + "</div>"
-				}
+			if nearHTML != "" {
+				initialTable += "<div id=\"result-container\">" + nearHTML + ccpFooterHTML + "</div>"
 			} else {
 				initialTable += "<div id=\"result-container\">" + ccpFooterHTML + "</div>"
 			}
@@ -7542,6 +7570,7 @@ func main() {
 				"FilterIconHTML":          template.HTML(filterIconHTML),
 			"ShipIconsStyle":          getShipIconsEmbeddedStyle(),
 			"MilitiaIconsStyle":       getMilitiaIconsEmbeddedStyle(),
+			"TradeHubFilterCSS":       renderTradeHubFilterCSS(),
 			"LoginImageLargeDataURI":  loginImageLargeDataURI,
 			"LoginImageSmallDataURI":  loginImageSmallDataURI,
 				"DonateURL":               donateURL,
@@ -7606,7 +7635,6 @@ func main() {
 
 		// Cache miss or expired: build HTML and populate cache.
 		jumpCloneBody := renderJumpCloneTableHTML()
-		initialResult := getNearTradeHubsResult()
 		readyTablesMu.RLock()
 		initialTable := readyTheraCampsHTML
 		nearHTML := readyNearTradeHubsByFaction[""]
@@ -7614,12 +7642,8 @@ func main() {
 		if initialTable == "" || nearHTML == "" {
 			invalidateIndexHTMLCache()
 		}
-		if len(initialResult) > 0 {
-			if nearHTML != "" {
-				initialTable += "<div id=\"result-container\">" + nearHTML + ccpFooterHTML + "</div>"
-			} else {
-				initialTable += "<div id=\"result-container\">" + ccpFooterHTML + "</div>"
-			}
+		if nearHTML != "" {
+			initialTable += "<div id=\"result-container\">" + nearHTML + ccpFooterHTML + "</div>"
 		} else {
 			initialTable += "<div id=\"result-container\">" + ccpFooterHTML + "</div>"
 		}
@@ -7640,6 +7664,7 @@ func main() {
 			"FilterIconHTML":          template.HTML(filterIconHTML),
 			"ShipIconsStyle":          getShipIconsEmbeddedStyle(),
 			"MilitiaIconsStyle":       getMilitiaIconsEmbeddedStyle(),
+			"TradeHubFilterCSS":       renderTradeHubFilterCSS(),
 			"LoginImageLargeDataURI":  loginImageLargeDataURI,
 			"LoginImageSmallDataURI":  loginImageSmallDataURI,
 			"DonateURL":               donateURL,
