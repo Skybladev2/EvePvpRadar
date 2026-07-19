@@ -1283,7 +1283,8 @@
         }
         /* CSS-based security class filtering (no JS needed) */
         body:has(#filter-lowsec:not(:checked)) #result tr[data-sec="lowsec"],
-        body:has(#filter-nullsec:not(:checked)) #result tr[data-sec="nullsec"] {
+        body:has(#filter-nullsec:not(:checked)) #result tr[data-sec="nullsec"],
+        body:has(#filter-gatecamps:checked) #result tr:has(.route-warning-sign) {
             display: none !important;
         }
         /* Filter indicator icon pinned at top-left of table */
@@ -3240,8 +3241,8 @@ function applyMilitiaFilter() {
 }
 
 // Apply security filters based on checkbox states
-// Lowsec, nullsec, and trade hub row visibility is handled by CSS :has() rules.
-// This function handles pilot-only, gatecamps, max attackers (JS class-based)
+// Lowsec, nullsec, trade hub, and gatecamp row visibility is handled by CSS :has() rules.
+// This function handles pilot-only, max attackers (JS class-based)
 // and counts all hidden rows for the filter indicator.
 function applySecurityFilters() {
   applyMilitiaFilter();
@@ -3264,7 +3265,7 @@ function applySecurityFilters() {
     return;
   }
 
-  // Count rows hidden by CSS (lowsec, nullsec, trade hubs) for the indicator.
+  // Count rows hidden by CSS (lowsec, nullsec, trade hubs, gatecamps) for the indicator.
   let hiddenByLowsec = 0;
   let hiddenByNullsec = 0;
   let hiddenByTradeHub = 0;
@@ -3296,7 +3297,32 @@ function applySecurityFilters() {
   let gatecampHidSelectedPilotRows = false;
   const hiddenSystemsForSelectedPilots = new Set();
 
-  const jsFiltersActive = hideGatecamps || maxAttackersLimit >= 1 || pilotOnlyCharacterIds.size > 0;
+  // Count gatecamp-hidden rows (CSS hides them; count for indicator + pilot hints)
+  if (hideGatecamps) {
+    resultTable.querySelectorAll("tbody tr").forEach(row => {
+      const cells = row.querySelectorAll("td");
+      for (let i = 0; i < cells.length; i++) {
+        if (cells[i].querySelector(".distance-value")) {
+          if (cells[i].querySelector(".route-warning-sign")) {
+            hiddenByGatecamps++;
+            if (pilotOnlyCharacterIds.size > 0) {
+              for (const cid of pilotOnlyCharacterIds) {
+                if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
+                  gatecampHidSelectedPilotRows = true;
+                  const systemName = getRowSystemDisplayName(row);
+                  if (systemName) hiddenSystemsForSelectedPilots.add(systemName);
+                  break;
+                }
+              }
+            }
+          }
+          break;
+        }
+      }
+    });
+  }
+
+  const jsFiltersActive = maxAttackersLimit >= 1 || pilotOnlyCharacterIds.size > 0;
 
   if (!jsFiltersActive) {
     for (const row of resultTable.querySelectorAll("tbody tr.filtered-out")) {
@@ -3313,29 +3339,6 @@ function applySecurityFilters() {
           if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) { anyMatch = true; break; }
         }
         if (!anyMatch) { hiddenByPilot++; shouldHide = true; }
-      }
-
-      if (!shouldHide && hideGatecamps) {
-        const cells = row.querySelectorAll("td");
-        for (let i = 0; i < cells.length; i++) {
-          if (cells[i].querySelector(".distance-value")) {
-            if (cells[i].querySelector(".route-warning-sign")) {
-              hiddenByGatecamps++;
-              shouldHide = true;
-              if (pilotOnlyCharacterIds.size > 0) {
-                for (const cid of pilotOnlyCharacterIds) {
-                  if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) {
-                    gatecampHidSelectedPilotRows = true;
-                    const systemName = getRowSystemDisplayName(row);
-                    if (systemName) hiddenSystemsForSelectedPilots.add(systemName);
-                    break;
-                  }
-                }
-              }
-            }
-            break;
-          }
-        }
       }
 
       if (!shouldHide && maxAttackersLimit > 0) {
