@@ -147,6 +147,30 @@ func newProgressWriter(w io.Writer) *progressWriter {
 	}
 }
 
+type stallReader struct {
+	wrapped      io.Reader
+	stallTimeout time.Duration
+}
+
+func (sr *stallReader) Read(p []byte) (int, error) {
+	type result struct {
+		n   int
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		n, err := sr.wrapped.Read(p)
+		ch <- result{n, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.n, r.err
+	case <-time.After(sr.stallTimeout):
+		log.Fatalf("SDE download stalled for %v, exiting", sr.stallTimeout)
+		return 0, nil // unreachable
+	}
+}
+
 func downloadSDEFile() error {
 	initSDEHTTPClient()
 
@@ -182,7 +206,8 @@ func downloadSDEFile() error {
 	pw := newProgressWriter(out)
 	go pw.reportLoop()
 
-	written, err := io.Copy(pw, resp.Body)
+	sr := &stallReader{wrapped: resp.Body, stallTimeout: 5 * time.Second}
+	written, err := io.Copy(pw, sr)
 	close(pw.done)
 
 	if err != nil {
