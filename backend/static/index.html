@@ -1498,8 +1498,58 @@
     <template id="pilot-running-icon-template">[[.PilotRunningIconHTML]]</template>
     <template id="pilot-standing-icon-template">[[.PilotStandingIconHTML]]</template>
     <template id="pilot-filter-icon-template">[[.FilterIconHTML]]</template>
+    <header id="app-header">
+        <h1>Eve PvP Radar</h1>
+        <div id="auth-container">
+            <div id="auth-logged-out" style="display: none;">
+                <a href="#" id="eve-login-button" style="display: inline-block; text-decoration: none;">
+                    <img src="[[.LoginImageLargeDataURI]]" 
+                         alt="Log in with EVE Online" 
+                         style="height: 45px; width: auto; border: none; cursor: pointer;"
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-block';">
+                    <span style="display: none; background-color: #1a1a1a; color: #e0e0e0; padding: 0.625rem 1.25rem; border: 2px solid #6ab7ff; border-radius: 4px; cursor: pointer; font-weight: bold;">Log in with EVE Online</span>
+                </a>
+            </div>
+            <div id="auth-logged-in" style="display: none;">
+                <span id="militia-clock-icon" style="display: none; cursor: pointer; margin-right: 4px; position: relative;" data-tooltip="Character militia updates once a day after downtime. Click to hide.">🕐</span>
+                <span id="militia-faction-icon" style="display: none;"></span>
+                <img id="character-portrait" src="" alt="" style="display: none;">
+                <span id="character-name" style="color: #e0e0e0;"></span>
+                <a href="#" id="logout-button" style="color: #6ab7ff; text-decoration: none; cursor: pointer;">Logout</a>
+            </div>
+        </div>
+    </header>
     <script>
-// Auth state embedded by server (no status request needed)
+// ponytail: show auth button immediately, before the main (large) script block.
+// Apply auth state right away so login/register buttons render as early as possible.
+(function() {
+  try {
+    var a = JSON.parse(atob("[[.AuthBase64]]"));
+    window.__auth = a;
+    if (a && a.authenticated) {
+      document.getElementById("auth-logged-out").style.display = "none";
+      document.getElementById("auth-logged-in").style.display = "flex";
+      var n = a.characterName || a.character_name || (a.characterID ? "Character " + a.characterID : "");
+      if (n) document.getElementById("character-name").textContent = n;
+      var ob = document.getElementById("logout-button");
+      if (ob) {
+        var u = (typeof window.APP_CONFIG !== 'undefined' && window.APP_CONFIG.apiUrl) ? window.APP_CONFIG.apiUrl : "";
+        ob.href = (u ? u.replace(/\/$/, "") : "") + "/api/auth/logout";
+      }
+    } else {
+      document.getElementById("auth-logged-out").style.display = "block";
+      // Set login href now so clicking works before main script runs.
+      var lb = document.getElementById("eve-login-button");
+      if (lb) {
+        var u = (typeof window.APP_CONFIG !== 'undefined' && window.APP_CONFIG.apiUrl) ? window.APP_CONFIG.apiUrl : "";
+        lb.href = (u ? u.replace(/\/$/, "") : "") + "/api/auth/login";
+      }
+    }
+  } catch(e) {}
+})();
+</script>
+    <script>
+// Auth state already applied by the tiny script above; re-parsed here for later use.
 window.__auth = JSON.parse(atob("[[.AuthBase64]]"));
 // API base URL: injected by Docker entrypoint from API_URL env.
 // Empty or "/api" = same-domain (nginx proxies /api to backend); full URL = separate backend (we append /api).
@@ -1681,8 +1731,6 @@ async function initializeApplication() {
     ensureCcpFooterExists(); // Footer is sibling of result-container so visible even with no results or unauthenticated
     await loadInitialData();
     bindEventHandlers();
-    // Set up auth button URLs
-    setupAuthButtons();
     // Apply auth state from server-embedded data (no network request)
     const isAuthenticated = applyAuthFromPage();
     // Fetch character militia from ESI if not already embedded in auth data
@@ -1705,20 +1753,6 @@ async function initializeApplication() {
     // Table load for trade-hubs and proximity is already done in handleModeChange()
   } catch (error) {
     console.error("Initialization failed:", error);
-  }
-}
-
-// Set up authentication button URLs to point to backend
-function setupAuthButtons() {
-  const loginButton = document.getElementById("eve-login-button");
-  const logoutButton = document.getElementById("logout-button");
-  
-  if (loginButton) {
-    loginButton.href = Config.endpoints.authLogin;
-  }
-  
-  if (logoutButton) {
-    logoutButton.href = Config.endpoints.authLogout;
   }
 }
 
@@ -3737,27 +3771,6 @@ function hideSetDestinationButtons() {
   });
 }
 </script>
-    <header id="app-header">
-        <h1>Eve PvP Radar</h1>
-        <div id="auth-container">
-            <div id="auth-logged-out" style="display: none;">
-                <a href="#" id="eve-login-button" style="display: inline-block; text-decoration: none;">
-                    <img src="[[.LoginImageLargeDataURI]]" 
-                         alt="Log in with EVE Online" 
-                         style="height: 45px; width: auto; border: none; cursor: pointer;"
-                         onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-block';">
-                    <span style="display: none; background-color: #1a1a1a; color: #e0e0e0; padding: 0.625rem 1.25rem; border: 2px solid #6ab7ff; border-radius: 4px; cursor: pointer; font-weight: bold;">Log in with EVE Online</span>
-                </a>
-            </div>
-            <div id="auth-logged-in" style="display: none;">
-                <span id="militia-clock-icon" style="display: none; cursor: pointer; margin-right: 4px; position: relative;" data-tooltip="Character militia updates once a day after downtime. Click to hide.">🕐</span>
-                <span id="militia-faction-icon" style="display: none;"></span>
-                <img id="character-portrait" src="" alt="" style="display: none;">
-                <span id="character-name" style="color: #e0e0e0;"></span>
-                <a href="#" id="logout-button" style="color: #6ab7ff; text-decoration: none; cursor: pointer;">Logout</a>
-            </div>
-        </div>
-    </header>
     <div id="jump-clone-stations">
         <h2>
             <span class="toggle-icon">▼</span>
