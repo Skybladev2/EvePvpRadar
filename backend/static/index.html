@@ -465,6 +465,8 @@
             overflow-x: auto;
             margin: 0.625rem 0;
             position: relative;
+            display: flex;
+            flex-direction: column;
         }
         /* Mobile: ensure table is scrollable horizontally */
         @media (max-width: 768px) {
@@ -1061,6 +1063,17 @@
         .hubs-jump-clones-error {
             color: #888;
             padding: 0.5rem 0;
+            order: 999;
+        }
+        #hubs-jump-clones-loading {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+        body:has(#table-loaded) #hubs-jump-clones-loading {
+            visibility: hidden;
         }
         .hubs-jump-clones-error {
             color: #c66;
@@ -1887,8 +1900,7 @@ function bindEventHandlers() {
       applySecurityFilters();
     });
   });
-  const hubsJumpClonesLoading = document.getElementById("hubs-jump-clones-loading");
-  if (hubsJumpClonesLoading) hubsJumpClonesLoading.style.display = "none";
+
 
   // Handle distance cell clicks to show/hide routes (using event delegation)
   document.addEventListener("click", function(e) {
@@ -3789,7 +3801,6 @@ function hideSetDestinationButtons() {
                     [[.JumpCloneTableBody]]
                 </tbody>
             </table>
-            <div id="hubs-jump-clones-loading" class="hubs-jump-clones-loading">Loading…</div>
             <div id="hubs-jump-clones-error" class="hubs-jump-clones-error" style="display: none;"></div>
         </div>
     </div>

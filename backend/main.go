@@ -7542,9 +7542,9 @@ func main() {
 				invalidateIndexHTMLCache()
 			}
 			if nearHTML != "" {
-				initialTable += "<div id=\"result-container\">" + nearHTML + ccpFooterHTML + "</div>"
+				initialTable += "<div id=\"result-container\"><div id=\"hubs-jump-clones-loading\" class=\"hubs-jump-clones-loading\">Loading…</div>" + nearHTML + "<span id=\"table-loaded\"></span>" + ccpFooterHTML + "</div>"
 			} else {
-				initialTable += "<div id=\"result-container\">" + ccpFooterHTML + "</div>"
+				initialTable += "<div id=\"result-container\"><div id=\"hubs-jump-clones-loading\" class=\"hubs-jump-clones-loading\">Loading…</div>" + ccpFooterHTML + "</div>"
 			}
 			authData := map[string]interface{}{
 				"authenticated":      true,
@@ -7643,9 +7643,9 @@ func main() {
 			invalidateIndexHTMLCache()
 		}
 		if nearHTML != "" {
-			initialTable += "<div id=\"result-container\">" + nearHTML + ccpFooterHTML + "</div>"
+			initialTable += "<div id=\"result-container\"><div id=\"hubs-jump-clones-loading\" class=\"hubs-jump-clones-loading\">Loading…</div>" + nearHTML + "<span id=\"table-loaded\"></span>" + ccpFooterHTML + "</div>"
 		} else {
-			initialTable += "<div id=\"result-container\">" + ccpFooterHTML + "</div>"
+			initialTable += "<div id=\"result-container\"><div id=\"hubs-jump-clones-loading\" class=\"hubs-jump-clones-loading\">Loading…</div>" + ccpFooterHTML + "</div>"
 		}
 		authData := map[string]interface{}{"authenticated": false}
 		authJSON, _ := json.Marshal(authData)
