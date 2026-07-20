@@ -1063,14 +1063,11 @@
         .hubs-jump-clones-error {
             color: #888;
             padding: 0.5rem 0;
-            order: 999;
         }
         #hubs-jump-clones-loading {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            order: 999;
             text-align: center;
+            padding: 0.5rem 0;
         }
         body:has(#table-loaded) #hubs-jump-clones-loading {
             visibility: hidden;
@@ -2345,9 +2342,6 @@ async function handleModeChange() {
         }
         const rc = document.getElementById("result-container");
         if (rc) rc.style.display = "block";
-        requestAnimationFrame(() => {
-          scrollTableToTop(rc);
-        });
       } else {
         ensureTableExists();
         const rc = document.getElementById("result-container");
@@ -3896,5 +3890,4 @@ function hideSetDestinationButtons() {
     })();
     </script>
     [[.InitialTableHTML]]
-</body>
 </html>
