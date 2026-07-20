@@ -1287,6 +1287,13 @@
         body:has(#filter-gatecamps:checked) #result tr:has(.route-warning-sign) {
             display: none !important;
         }
+        /* Highsec militia: hide kill rows and system rows with only highsec kills when unchecked */
+        body:has(#militia-highsec:not(:checked)) .killmail-row[data-source="highsec-station"] {
+            display: none !important;
+        }
+        body:has(#militia-highsec:not(:checked)) #result tr:has(.killmail-row[data-source="highsec-station"]):not(:has(.killmail-row:not([data-source="highsec-station"]))) {
+            display: none !important;
+        }
         /* Filter indicator icon pinned at top-left of table */
         #filter-indicator {
             display: none;
@@ -2023,7 +2030,7 @@ function bindEventHandlers() {
     militiaHighsec.checked = saved !== "false";
     militiaHighsec.addEventListener("change", function() {
       localStorage.setItem("evePvpSearchMilitiaHighsec", this.checked ? "true" : "false");
-      applyMilitiaFilter();
+      applySecurityFilters();
     });
   }
 
@@ -3165,6 +3172,7 @@ function updateFilterIndicator(counts) {
   const items = [];
   if (counts.lowsec > 0) items.push("Lowsec: " + counts.lowsec + " system" + (counts.lowsec !== 1 ? "s" : "") + " hidden");
   if (counts.nullsec > 0) items.push("Nullsec: " + counts.nullsec + " system" + (counts.nullsec !== 1 ? "s" : "") + " hidden");
+  if (counts.highsec > 0) items.push("Highsec: " + counts.highsec + " system" + (counts.highsec !== 1 ? "s" : "") + " hidden");
   if (counts.pilot > 0) items.push("Pilot filter: " + counts.pilot + " system" + (counts.pilot !== 1 ? "s" : "") + " hidden");
   if (counts.tradeHub > 0) items.push("Trade hub filter: " + counts.tradeHub + " system" + (counts.tradeHub !== 1 ? "s" : "") + " hidden");
   if (counts.gatecamps > 0) items.push("Gatecamp filter: " + counts.gatecamps + " system" + (counts.gatecamps !== 1 ? "s" : "") + " hidden");
@@ -3193,12 +3201,12 @@ function setMaxAttackersLimit(value) {
   applySecurityFilters();
 }
 
-// Apply militia filter: hide/show highsec kill rows and system rows based on selected militia and highsec checkbox.
+// Apply militia filter: manage highsec checkbox visibility and state.
+// Row visibility is handled by CSS :has() rules (no JS needed).
 function applyMilitiaFilter() {
   const auth = window.__auth || {};
   const militiaShortName = auth.militiaShortName || "";
   const highsecCheckbox = document.getElementById("militia-highsec");
-  const showHighsec = highsecCheckbox ? highsecCheckbox.checked : false;
 
   // Show/hide the highsec checkbox label based on whether character has militia
   const highsecLabel = document.getElementById("militia-highsec-label");
@@ -3206,38 +3214,10 @@ function applyMilitiaFilter() {
     highsecLabel.style.display = militiaShortName ? "" : "none";
   }
 
-  const resultTable = document.getElementById("result");
-  if (!resultTable) return;
-
-  resultTable.querySelectorAll("tbody tr").forEach(row => {
-    // Show/hide highsec kill rows
-    const highsecRows = row.querySelectorAll('.killmail-row[data-source="highsec-station"]');
-    let hasVisibleHighsec = false;
-
-    highsecRows.forEach(kmRow => {
-      if (!militiaShortName || !showHighsec) {
-        kmRow.style.display = "none";
-      } else {
-        kmRow.style.display = "";
-        hasVisibleHighsec = true;
-      }
-    });
-
-    // Regular kill rows always visible
-    row.querySelectorAll('.killmail-row:not([data-source="highsec-station"])').forEach(kmRow => {
-      kmRow.style.display = "";
-    });
-
-    // Hide system row if it has only highsec kills and none are visible
-    if (!hasVisibleHighsec && highsecRows.length > 0) {
-      const hasRegularKills = row.querySelectorAll('.killmail-row:not([data-source="highsec-station"])').length > 0;
-      row.style.display = hasRegularKills ? "" : "none";
-    } else {
-      row.style.display = "";
-    }
-  });
-
-  // No client-side icon colorizing — server pre-applies militia-friendly/enemy classes
+  // No militia: force-uncheck so CSS rules hide highsec kills
+  if (!militiaShortName && highsecCheckbox) {
+    highsecCheckbox.checked = false;
+  }
 }
 
 // Apply security filters based on checkbox states
@@ -3269,6 +3249,7 @@ function applySecurityFilters() {
   let hiddenByLowsec = 0;
   let hiddenByNullsec = 0;
   let hiddenByTradeHub = 0;
+  let hiddenByHighsec = 0;
   if (!showLowsec) {
     hiddenByLowsec = resultTable.querySelectorAll('tbody tr[data-sec="lowsec"]').length;
   }
@@ -3279,6 +3260,16 @@ function applySecurityFilters() {
     resultTable.querySelectorAll("tbody tr[data-trade-hub-row]").forEach(row => {
       const name = (row.getAttribute("data-trade-hub-row") || "").trim().toLowerCase();
       if (name && hiddenTradeHubs.has(name)) hiddenByTradeHub++;
+    });
+  }
+  // Count system rows hidden by CSS highsec rule (only-highsec-kill rows)
+  const highsecCheckbox = document.getElementById("militia-highsec");
+  if (highsecCheckbox && !highsecCheckbox.checked) {
+    resultTable.querySelectorAll("tbody tr").forEach(row => {
+      if (row.querySelectorAll('.killmail-row[data-source="highsec-station"]').length > 0 &&
+          row.querySelectorAll('.killmail-row:not([data-source="highsec-station"])').length === 0) {
+        hiddenByHighsec++;
+      }
     });
   }
 
@@ -3356,6 +3347,7 @@ function applySecurityFilters() {
   updateFilterIndicator({
     lowsec: hiddenByLowsec,
     nullsec: hiddenByNullsec,
+    highsec: hiddenByHighsec,
     pilot: hiddenByPilot,
     tradeHub: hiddenByTradeHub,
     gatecamps: hiddenByGatecamps,
