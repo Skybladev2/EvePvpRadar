@@ -1870,27 +1870,10 @@ function bindEventHandlers() {
     input.addEventListener("change", handleModeChange);
   });
 
-  // Handle jump clone stations toggle
-  const jumpCloneStations = document.getElementById("jump-clone-stations");
-  if (jumpCloneStations) {
-    const header = jumpCloneStations.querySelector("h2");
-    if (header) {
-      header.addEventListener("click", function() {
-        jumpCloneStations.classList.toggle("collapsed");
-      });
-    }
-  }
-
-  // Handle Thera camps section toggle
+  // Thera camps one-time setup (toggle handled by early delegation)
   const theraCampsContainer = document.getElementById("thera-camps-container");
   if (theraCampsContainer) {
     ensureShipTypeIconsUseWikiLinks(theraCampsContainer);
-    const theraCampsHeader = theraCampsContainer.querySelector(".thera-camps-header");
-    if (theraCampsHeader) {
-      theraCampsHeader.addEventListener("click", function() {
-        theraCampsContainer.classList.toggle("thera-camps-collapsed");
-      });
-    }
     bindTheraFloatingTooltips(theraCampsContainer);
   }
 
@@ -3869,12 +3852,18 @@ function hideSetDestinationButtons() {
         </label>
     </div>
     <script>
-    // ponytail: early delegation for .attackers-toggle so (show)/(hide) works before DOMContentLoaded.
+    // ponytail: early delegation so section toggles work before DOMContentLoaded.
     document.addEventListener("click", function(e) {
-      var toggle = e.target && e.target.closest && e.target.closest(".attackers-toggle");
-      if (!toggle) return;
-      handleAttackersToggle(toggle);
-      toggle.dataset.eh = "1"; // signal later bindEventHandlers handler to skip
+      var t = e.target;
+      // Trade hubs section: click h2 to toggle
+      var h2 = t.closest && t.closest("#jump-clone-stations h2");
+      if (h2) { h2.closest("#jump-clone-stations").classList.toggle("collapsed"); return; }
+      // Thera camps section: click header to toggle
+      var theraHeader = t.closest && t.closest(".thera-camps-header");
+      if (theraHeader) { var c = theraHeader.closest("#thera-camps-container"); if (c) c.classList.toggle("thera-camps-collapsed"); return; }
+      // Attackers (show)/(hide)
+      var toggle = t.closest && t.closest(".attackers-toggle");
+      if (toggle) { handleAttackersToggle(toggle); toggle.dataset.eh = "1"; }
     });
     // Restore saved filter checkbox states before the results table is parsed (CSS :has() filters).
     (function() {
