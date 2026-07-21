@@ -66,82 +66,15 @@ let initialLoadDone = false;
 // Store current location to restore when switching back to proximity mode
 let currentLocationData = null; // { systemID, systemName }
 
-// Helper function to slide toggle an element
-function slideToggle(element, duration = 200) {
-  if (!element) return;
-  
-  const isHidden = element.classList.contains('hidden') ||
-                   window.getComputedStyle(element).display === 'none';
-  
-  if (isHidden) {
-    element.classList.remove('hidden');
-    
-    // Temporarily make element invisible but still in layout flow to measure
-    const originalVisibility = element.style.visibility;
-    element.style.visibility = 'hidden';
-    element.style.display = 'block';
-    element.style.maxHeight = 'none';
-    element.style.height = 'auto';
-    
-    // Force layout calculation
-    element.offsetHeight;
-    
-    // Measure the actual rendered height
-    const rect = element.getBoundingClientRect();
-    const height = rect.height;
-    
-    // Reset visibility and prepare for animation
-    // Use max-height which works better with padding/borders
-    element.style.visibility = originalVisibility;
-    element.style.maxHeight = '0px';
-    element.style.overflow = 'hidden';
-    element.style.transition = `max-height ${duration}ms ease`;
-    
-    // Force reflow to ensure max-height: 0 is applied
-    element.offsetHeight;
-    
-    // Animate to target height
-    element.style.maxHeight = height + 'px';
-    
-    setTimeout(() => {
-      element.style.maxHeight = '';
-      element.style.overflow = '';
-      element.style.transition = '';
-      element.style.display = 'block'; // Keep display: block to prevent collapse
-    }, duration);
-  } else {
-    // Measure current height
-    const rect = element.getBoundingClientRect();
-    const height = rect.height;
-    
-    element.style.maxHeight = height + 'px';
-    element.style.overflow = 'hidden';
-    element.style.transition = `max-height ${duration}ms ease`;
-    
-    // Force reflow
-    element.offsetHeight;
-    
-    element.style.maxHeight = '0px';
-    
-    setTimeout(() => {
-      element.classList.add('hidden');
-      element.style.maxHeight = '';
-      element.style.overflow = '';
-      element.style.transition = '';
-      element.style.display = ''; // Remove inline style, let CSS handle it
-    }, duration);
-  }
-}
-
 // Shared logic for attackers-toggle (show)/(hide) clicks.
 // Called by both the early pre-DOMContentLoaded delegation and the later bindEventHandlers delegation.
 function handleAttackersToggle(toggle) {
   var targetId = toggle.getAttribute("data-target");
   var target = targetId && document.getElementById(targetId);
   if (!target) return;
-  var visible = window.getComputedStyle(target).display !== "none";
-  toggle.textContent = visible ? "(show)" : "(hide)";
-  slideToggle(target, 200);
+  var expanding = !target.classList.contains("expanded");
+  target.classList.toggle("expanded", expanding);
+  toggle.textContent = expanding ? "(hide)" : "(show)";
 }
 
 // DOM Ready Handler
@@ -341,12 +274,11 @@ function bindEventHandlers() {
     }
     
     if (distanceValue) {
-      // Use closest("td") to find the table cell, which is more robust than parentElement
       const cell = distanceValue.closest("td");
       if (cell) {
         const routeContainer = cell.querySelector(".route-container");
         if (routeContainer) {
-          slideToggle(routeContainer, 200);
+          routeContainer.classList.toggle("expanded");
         }
       }
     }
@@ -1711,32 +1643,36 @@ function applySecurityFilters() {
     return;
   }
 
-  // Count rows hidden by CSS (lowsec, nullsec, trade hubs, gatecamps) for the indicator.
+  // Query rows once; filter/count in JS instead of repeated querySelectorAll.
+  const allRows = resultTable.querySelectorAll("tbody tr");
   let hiddenByLowsec = 0;
   let hiddenByNullsec = 0;
   let hiddenByTradeHub = 0;
   let hiddenByHighsec = 0;
-  if (!showLowsec) {
-    hiddenByLowsec = resultTable.querySelectorAll('tbody tr[data-sec="lowsec"]').length;
+
+  // Count rows hidden by CSS (lowsec, nullsec, trade hubs) for the indicator.
+  if (!showLowsec || !showNullsec || hasHiddenHubs) {
+    for (let i = 0; i < allRows.length; i++) {
+      const row = allRows[i];
+      if (!showLowsec && row.getAttribute("data-sec") === "lowsec") hiddenByLowsec++;
+      if (!showNullsec && row.getAttribute("data-sec") === "nullsec") hiddenByNullsec++;
+      if (hasHiddenHubs) {
+        const hubName = (row.getAttribute("data-trade-hub-row") || "").trim().toLowerCase();
+        if (hubName && hiddenTradeHubs.has(hubName)) hiddenByTradeHub++;
+      }
+    }
   }
-  if (!showNullsec) {
-    hiddenByNullsec = resultTable.querySelectorAll('tbody tr[data-sec="nullsec"]').length;
-  }
-  if (hasHiddenHubs) {
-    resultTable.querySelectorAll("tbody tr[data-trade-hub-row]").forEach(row => {
-      const name = (row.getAttribute("data-trade-hub-row") || "").trim().toLowerCase();
-      if (name && hiddenTradeHubs.has(name)) hiddenByTradeHub++;
-    });
-  }
+
   // Count system rows hidden by CSS highsec rule (only-highsec-kill rows)
   const highsecCheckbox = document.getElementById("militia-highsec");
   if (highsecCheckbox && !highsecCheckbox.checked) {
-    resultTable.querySelectorAll("tbody tr").forEach(row => {
+    for (let i = 0; i < allRows.length; i++) {
+      const row = allRows[i];
       if (row.querySelectorAll('.killmail-row[data-source="highsec-station"]').length > 0 &&
           row.querySelectorAll('.killmail-row:not([data-source="highsec-station"])').length === 0) {
         hiddenByHighsec++;
       }
-    });
+    }
   }
 
   if (mode === "near_trade_hubs") {
@@ -1756,11 +1692,12 @@ function applySecurityFilters() {
 
   // Count gatecamp-hidden rows (CSS hides them; count for indicator + pilot hints)
   if (hideGatecamps) {
-    resultTable.querySelectorAll("tbody tr").forEach(row => {
+    for (let i = 0; i < allRows.length; i++) {
+      const row = allRows[i];
       const cells = row.querySelectorAll("td");
-      for (let i = 0; i < cells.length; i++) {
-        if (cells[i].querySelector(".distance-value")) {
-          if (cells[i].querySelector(".route-warning-sign")) {
+      for (let j = 0; j < cells.length; j++) {
+        if (cells[j].querySelector(".distance-value")) {
+          if (cells[j].querySelector(".route-warning-sign")) {
             hiddenByGatecamps++;
             if (pilotOnlyCharacterIds.size > 0) {
               for (const cid of pilotOnlyCharacterIds) {
@@ -1776,17 +1713,18 @@ function applySecurityFilters() {
           break;
         }
       }
-    });
+    }
   }
 
   const jsFiltersActive = maxAttackersLimit >= 1 || pilotOnlyCharacterIds.size > 0;
 
   if (!jsFiltersActive) {
-    for (const row of resultTable.querySelectorAll("tbody tr.filtered-out")) {
-      row.classList.remove("filtered-out");
+    for (let i = 0; i < allRows.length; i++) {
+      allRows[i].classList.remove("filtered-out");
     }
   } else {
-    resultTable.querySelectorAll("tbody tr").forEach(row => {
+    for (let i = 0; i < allRows.length; i++) {
+      const row = allRows[i];
       row.classList.remove("filtered-out");
       let shouldHide = false;
 
@@ -1800,14 +1738,14 @@ function applySecurityFilters() {
 
       if (!shouldHide && maxAttackersLimit > 0) {
         const kmRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
-        for (const km of kmRows) {
-          const n = parseInt(km.getAttribute("data-attacker-count") || "0", 10);
+        for (let k = 0; k < kmRows.length; k++) {
+          const n = parseInt(kmRows[k].getAttribute("data-attacker-count") || "0", 10);
           if (n > maxAttackersLimit) { hiddenByMaxAttackers++; shouldHide = true; break; }
         }
       }
 
       if (shouldHide) row.classList.add("filtered-out");
-    });
+    }
   }
 
   updateFilterIndicator({

@@ -229,9 +229,10 @@
             overflow-wrap: break-word;
             word-wrap: break-word;
             max-width: 100%;
-        }
-        .route-container.hidden {
             display: none;
+        }
+        .route-container.expanded {
+            display: block;
         }
         .route-header {
             font-weight: bold;
@@ -272,7 +273,6 @@
         }
         .distance-value {
             cursor: pointer;
-            border-bottom: 1px dashed currentColor;
             display: inline-block;
         }
         .route-warning-sign {
@@ -407,6 +407,9 @@
             display: none;
             margin-top: 0.3125rem;
         }
+        .attackers-list.expanded {
+            display: block;
+        }
         .attackers-table {
             border: none !important;
             border-collapse: collapse;
@@ -467,6 +470,7 @@
             position: relative;
             display: flex;
             flex-direction: column;
+            contain: layout style paint;
         }
         /* Mobile: ensure table is scrollable horizontally */
         @media (max-width: 768px) {
@@ -476,6 +480,7 @@
             }
             #result-container {
                 overflow-x: visible;
+                contain: none;
             }
             #result,
             #result thead,
@@ -494,6 +499,7 @@
                 border: 1px solid #444;
                 margin-bottom: 0.75rem;
                 border-radius: 6px;
+                content-visibility: visible;
             }
             #result td {
                 padding: 0.625rem !important;
@@ -544,6 +550,10 @@
             background-color: #1a1a1a;
             width: 100%;
             table-layout: fixed;
+        }
+        #result tbody tr {
+            content-visibility: auto;
+            contain-intrinsic-size: auto 3rem;
         }
         /* Responsive column widths using percentages (except Range which fills remaining space) */
         #result thead th:first-child {

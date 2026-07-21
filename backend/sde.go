@@ -72,42 +72,24 @@ const (
 	sdeURL         = "https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip"
 	sdeZipFile     = "sde.zip"
 	sdeExtractDir  = "sde"
-	sdeMaxAgeHours = 24
 )
 
-// downloadSDE downloads the EVE Online SDE if it doesn't exist or is older than 24 hours
+// downloadSDE downloads the EVE Online SDE on every startup.
 func downloadSDE() error {
-	// Check if we need to download the SDE
-	needDownload := true
-
-	if info, err := os.Stat(sdeZipFile); err == nil {
-		// File exists, check if it's newer than 24 hours
-		if time.Since(info.ModTime()).Hours() < sdeMaxAgeHours {
-			needDownload = false
-			log.Printf("SDE file is less than %d hours old, skipping download", sdeMaxAgeHours)
-		} else {
-			log.Printf("SDE file is older than %d hours, downloading new version", sdeMaxAgeHours)
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			wait := time.Duration(1<<uint(attempt)) * time.Second
+			log.Printf("Retrying SDE download in %v (attempt %d/3)", wait, attempt+1)
+			time.Sleep(wait)
 		}
-	}
-
-	if needDownload {
-		var lastErr error
-		for attempt := 0; attempt < 3; attempt++ {
-			if attempt > 0 {
-				wait := time.Duration(1<<uint(attempt)) * time.Second
-				log.Printf("Retrying SDE download in %v (attempt %d/3)", wait, attempt+1)
-				time.Sleep(wait)
-			}
-			lastErr = downloadSDEFile()
-			if lastErr == nil {
-				return nil
-			}
-			log.Printf("SDE download attempt %d/3 failed: %v", attempt+1, lastErr)
+		lastErr = downloadSDEFile()
+		if lastErr == nil {
+			return nil
 		}
-		return fmt.Errorf("failed to download SDE after 3 attempts: %v", lastErr)
+		log.Printf("SDE download attempt %d/3 failed: %v", attempt+1, lastErr)
 	}
-
-	return nil
+	return fmt.Errorf("failed to download SDE after 3 attempts: %v", lastErr)
 }
 
 type progressWriter struct {

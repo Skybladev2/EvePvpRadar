@@ -5450,9 +5450,9 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 		}
 		html.WriteString("</span>")
 
-		// Route container (initially hidden)
+		// Route container (initially collapsed via CSS grid-template-rows: 0fr)
 		if len(system.Route) > 0 {
-			html.WriteString("<div class='route-container hidden'>")
+			html.WriteString("<div class='route-container'>")
 			routeHeaderText := "Route"
 			html.WriteString("<div class='route-header'>")
 			html.WriteString(template.HTMLEscapeString(routeHeaderText))
