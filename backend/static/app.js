@@ -355,7 +355,6 @@ function bindEventHandlers() {
     // Handle attackers list toggle using event delegation (works with dynamically updated content)
     const attackersToggle = e.target && e.target.closest && e.target.closest(".attackers-toggle");
     if (attackersToggle) {
-      if (attackersToggle.dataset.eh) { delete attackersToggle.dataset.eh; return; }
       e.preventDefault();
       e.stopPropagation();
       handleAttackersToggle(attackersToggle);
