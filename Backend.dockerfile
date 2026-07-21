@@ -23,6 +23,12 @@ ARG IMAGE_TAG
 ENV IMAGE_TAG=$IMAGE_TAG
 RUN test -n "$IMAGE_TAG" || (echo "IMAGE_TAG build-arg is required" && exit 1)
 
+# Minify JS (//go:embed picks up the minified file; source stays prettyprinted in repo)
+ARG ESBUILD_VERSION=v0.25.0
+RUN go run github.com/evanw/esbuild/cmd/esbuild@${ESBUILD_VERSION} \
+    --minify --target=es2020 --allow-overwrite \
+    /app/static/app.js --outfile=/app/static/app.js
+
 # Pin Go CLI tool versions so Docker builds don't auto-update to "too new" releases.
 # You can override these build args in `docker compose build`.
 ARG STATICCHECK_VERSION=v0.7.0

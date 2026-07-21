@@ -696,6 +696,18 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 // commit is set at build time via -ldflags "-X main.commit=..."
 var commit = ""
 
+// appJS holds the (already minified at build time) content of static/app.js.
+var appJS template.JS // #nosec G101 -- not a secret
+
+func loadAppJS() {
+	data, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		log.Printf("Warning: could not read embedded app.js: %v", err)
+		return
+	}
+	appJS = template.JS(data) // #nosec G204 -- embedded static
+}
+
 // containerTag returns the IMAGE_TAG from env, falling back to the ldflags commit value.
 func containerTag() string {
 	if tag := os.Getenv("IMAGE_TAG"); tag != "" {
@@ -7242,6 +7254,7 @@ func main() {
 	log.SetOutput(mw)
 
 	fmt.Fprintln(mw, "Starting up in: ", filepath.Dir(os.Args[0])) // #nosec G705 -- log output, not HTML
+	loadAppJS()
 	startup(mw)
 
 	// Fetch Thera signatures immediately on startup (without delay)
@@ -7561,7 +7574,7 @@ func main() {
 			pilotIconStandingHTML := getStandingHumanIconHTMLOrFallback()
 			filterIconHTML := getFilterIconHTMLOrFallback()
 			embedLoginImages()
-			data := map[string]interface{}{
+		data := map[string]interface{}{
 				"JumpCloneTableBody":      template.HTML(jumpCloneBody), // #nosec G203 -- server-rendered only
 				"InitialTableHTML":        template.HTML(initialTable),  // #nosec G203 -- server-rendered only
 				"AuthBase64":              template.JS(authBase64),      // #nosec G203 -- server-controlled auth JSON
@@ -7573,9 +7586,10 @@ func main() {
 			"TradeHubFilterCSS":       renderTradeHubFilterCSS(),
 			"LoginImageLargeDataURI":  loginImageLargeDataURI,
 			"LoginImageSmallDataURI":  loginImageSmallDataURI,
-				"DonateURL":               donateURL,
-				"DonateText":              donateText,
-				"ContainerTag":            containerTag(),
+			"DonateURL":               donateURL,
+			"DonateText":              donateText,
+			"ContainerTag":            containerTag(),
+			"AppJS":                   appJS,
 			}
 			if err := indexTmpl.ExecuteTemplate(w, "index.html", data); err != nil {
 				log.Printf("Error executing index template: %v", err)
@@ -7670,6 +7684,7 @@ func main() {
 			"DonateURL":               donateURL,
 			"DonateText":              donateText,
 			"ContainerTag":            containerTag(),
+			"AppJS":                   appJS,
 		}
 		var buf bytes.Buffer
 		if err := indexTmpl.ExecuteTemplate(&buf, "index.html", data); err != nil {
