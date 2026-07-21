@@ -1696,6 +1696,17 @@ function slideToggle(element, duration = 200) {
   }
 }
 
+// Shared logic for attackers-toggle (show)/(hide) clicks.
+// Called by both the early pre-DOMContentLoaded delegation and the later bindEventHandlers delegation.
+function handleAttackersToggle(toggle) {
+  var targetId = toggle.getAttribute("data-target");
+  var target = targetId && document.getElementById(targetId);
+  if (!target) return;
+  var visible = window.getComputedStyle(target).display !== "none";
+  toggle.textContent = visible ? "(show)" : "(hide)";
+  slideToggle(target, 200);
+}
+
 // DOM Ready Handler
 document.addEventListener('DOMContentLoaded', () => {
   debugLog("CLIENT: DOM ready, initializing application");
@@ -1992,15 +2003,10 @@ function bindEventHandlers() {
     // Handle attackers list toggle using event delegation (works with dynamically updated content)
     const attackersToggle = e.target && e.target.closest && e.target.closest(".attackers-toggle");
     if (attackersToggle) {
+      if (attackersToggle.dataset.eh) { delete attackersToggle.dataset.eh; return; }
       e.preventDefault();
       e.stopPropagation();
-      const targetId = attackersToggle.getAttribute("data-target");
-      const targetElement = document.getElementById(targetId);
-      if (targetElement) {
-        const isCurrentlyVisible = window.getComputedStyle(targetElement).display !== 'none';
-        attackersToggle.textContent = isCurrentlyVisible ? "(show)" : "(hide)";
-        slideToggle(targetElement, 200);
-      }
+      handleAttackersToggle(attackersToggle);
       return;
     }
     
@@ -3863,6 +3869,13 @@ function hideSetDestinationButtons() {
         </label>
     </div>
     <script>
+    // ponytail: early delegation for .attackers-toggle so (show)/(hide) works before DOMContentLoaded.
+    document.addEventListener("click", function(e) {
+      var toggle = e.target && e.target.closest && e.target.closest(".attackers-toggle");
+      if (!toggle) return;
+      handleAttackersToggle(toggle);
+      toggle.dataset.eh = "1"; // signal later bindEventHandlers handler to skip
+    });
     // Restore saved filter checkbox states before the results table is parsed (CSS :has() filters).
     (function() {
       try {
