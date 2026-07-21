@@ -2341,11 +2341,11 @@ async function handleModeChange() {
           else hideSetDestinationButtons();
         }
         const rc = document.getElementById("result-container");
-        if (rc) rc.style.display = "block";
+        if (rc) rc.style.display = "flex";
       } else {
         ensureTableExists();
         const rc = document.getElementById("result-container");
-        if (rc) rc.style.display = "block";
+        if (rc) rc.style.display = "flex";
       }
     }
   } else {
@@ -2370,7 +2370,7 @@ async function handleModeChange() {
         if (tbody) tbody.innerHTML = "";
       }
       const rc = document.getElementById("result-container");
-      if (rc) rc.style.display = "block";
+      if (rc) rc.style.display = "flex";
     }
   }
   } finally {
@@ -2509,7 +2509,7 @@ async function fetchNearTradeHubs() {
       console.error("CLIENT: No table found in HTML response");
       ensureTableExists();
       const container = document.getElementById("result-container");
-      if (container) container.style.display = "block";
+      if (container) container.style.display = "flex";
       return;
     }
     
@@ -2534,7 +2534,7 @@ async function fetchNearTradeHubs() {
       // Check if there are any data rows
       if (rowCount === 0) {
         // Show container with empty table and CCP footer
-        if (container) container.style.display = "block";
+        if (container) container.style.display = "flex";
         clearPilotOnlyFilter();
         resultTbody.innerHTML = newTbody.innerHTML;
         modeResultsCache.near_trade_hubs = null;
@@ -2544,7 +2544,7 @@ async function fetchNearTradeHubs() {
         if (window.location.hash) {
           history.replaceState(null, null, window.location.pathname + window.location.search);
         }
-        if (container) container.style.display = "block";
+        if (container) container.style.display = "flex";
         clearPilotOnlyFilter();
         resultTbody.innerHTML = newTbody.innerHTML;
         modeResultsCache.near_trade_hubs = {
@@ -2554,7 +2554,7 @@ async function fetchNearTradeHubs() {
       }
     } else {
       console.error("CLIENT: No tbody found in HTML response");
-      if (container) container.style.display = "block";
+      if (container) container.style.display = "flex";
       modeResultsCache.near_trade_hubs = null;
     }
     
@@ -2582,7 +2582,7 @@ async function fetchNearTradeHubs() {
     console.error("CLIENT: Fetch error for near trade hubs:", error);
     ensureTableExists();
     const container = document.getElementById("result-container");
-    if (container) container.style.display = "block";
+    if (container) container.style.display = "flex";
   }
 }
 
@@ -2597,7 +2597,7 @@ async function fetchProximity() {
       modeResultsCache.proximity = null;
       ensureTableExists();
       const container = document.getElementById("result-container");
-      if (container) container.style.display = "block";
+      if (container) container.style.display = "flex";
       return;
     }
     if (!response.ok) {
@@ -2627,7 +2627,7 @@ async function fetchProximity() {
       console.error("CLIENT: No table found in HTML response");
       ensureTableExists();
       const container = document.getElementById("result-container");
-      if (container) container.style.display = "block";
+      if (container) container.style.display = "flex";
       return;
     }
     
@@ -2652,7 +2652,7 @@ async function fetchProximity() {
       // Check if there are any data rows
       if (rowCount === 0) {
         // Show container with empty table and CCP footer
-        if (container) container.style.display = "block";
+        if (container) container.style.display = "flex";
         clearPilotOnlyFilter();
         resultTbody.innerHTML = newTbody.innerHTML;
         modeResultsCache.proximity = null;
@@ -2662,7 +2662,7 @@ async function fetchProximity() {
         if (window.location.hash) {
           history.replaceState(null, null, window.location.pathname + window.location.search);
         }
-        if (container) container.style.display = "block";
+        if (container) container.style.display = "flex";
         clearPilotOnlyFilter();
         resultTbody.innerHTML = newTbody.innerHTML;
         modeResultsCache.proximity = {
@@ -2673,7 +2673,7 @@ async function fetchProximity() {
       }
     } else {
       console.error("CLIENT: No tbody found in HTML response");
-      if (container) container.style.display = "block";
+      if (container) container.style.display = "flex";
       modeResultsCache.proximity = null;
     }
 
@@ -2703,7 +2703,7 @@ async function fetchProximity() {
     console.error("CLIENT: Fetch error for proximity systems:", error);
     ensureTableExists();
     const container = document.getElementById("result-container");
-    if (container) container.style.display = "block";
+    if (container) container.style.display = "flex";
   }
 }
 
