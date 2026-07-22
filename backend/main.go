@@ -6251,6 +6251,10 @@ func getSystemsWithPrecalculatedKills() map[int][]CachedKillmail {
 					filtered = append(filtered, kill)
 				}
 			}
+			// Set HighsecVisibleFor on each highsec kill so proximity mode can filter by faction
+			for i := range filtered {
+				filtered[i].HighsecVisibleFor = factionShortNamesForKill(&filtered[i])
+			}
 			if len(filtered) > 0 {
 				// Merge with existing stargate kills for this system
 				existing := result[systemID]
@@ -6969,12 +6973,24 @@ func proximityHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Separate highsec kills (with HighsecVisibleFor) from regular kills
+		var regularKills []CachedKillmail
+		var highsecKills []CachedKillmail
+		for _, kill := range kills {
+			if kill.HighsecVisibleFor != "" {
+				highsecKills = append(highsecKills, kill)
+			} else {
+				regularKills = append(regularKills, kill)
+			}
+		}
+
 		systemInRange := SystemInRange{
 			SystemID:    targetSystemID,
 			Name:        system.SystemName,
 			Dist:        dist,
 			Security:    system.Security,
-			RecentKills: kills,
+			RecentKills: regularKills,
+			HighsecKills: highsecKills,
 			Route:       route,
 		}
 		if viaThera {
