@@ -94,12 +94,15 @@ func moreRestrictiveMaxShipSize(a, b string) string {
 	return b
 }
 
-// TheraSignatureInfo stores information about a Thera signature
+// TheraSignatureInfo stores information about a Thera wormhole connection.
+// Each connection has two signature IDs: one visible in the k-space system
+// and one visible in Thera itself.
 type TheraSignatureInfo struct {
-	SignatureID string
-	WhType      string // Kept for backward compatibility, but MaxShipSize is preferred
-	MaxShipSize string // Direct from API: small, medium, large, xlarge, capital, unknown
-	IsEOL       bool   // Whether the signature is End-of-Life (EOL)
+	SignatureID      string // Signature ID in the k-space system (scan this to enter Thera)
+	TheraSignatureID string // Signature ID in Thera (scan this in Thera to exit)
+	WhType           string // Kept for backward compatibility, but MaxShipSize is preferred
+	MaxShipSize      string // Direct from API: small, medium, large, xlarge, capital, unknown
+	IsEOL            bool   // Whether the signature is End-of-Life (EOL)
 }
 
 // GraphData contains the graph data structures for double-buffering
@@ -141,10 +144,11 @@ func copyGraphData(src *GraphData) *GraphData {
 	// Deep copy theraSignatures map
 	for k, v := range src.TheraSignatures {
 		dst.TheraSignatures[k] = TheraSignatureInfo{
-			SignatureID: v.SignatureID,
-			WhType:      v.WhType,
-			MaxShipSize: v.MaxShipSize,
-			IsEOL:       v.IsEOL,
+			SignatureID:      v.SignatureID,
+			TheraSignatureID: v.TheraSignatureID,
+			WhType:           v.WhType,
+			MaxShipSize:      v.MaxShipSize,
+			IsEOL:            v.IsEOL,
 		}
 	}
 
@@ -768,33 +772,24 @@ func (rf *RouteFinder) fetchTheraSignatures() {
 				outSystemID = getIntFromInterface(sig.LeadsToSystem) // Fallback to legacy
 			}
 
-			// Signature ID for the non-Thera system's bookmark:
-			// - WH in k-space leading to Thera: scan ID is in_signature (source system).
-			// - WH in Thera leading to k-space: scan ID is out_signature (destination system).
-			// Preferring in_signature for all rows stored the Thera-side name and hid the k-space sig.
-			var sigID string
-			if outSystemID == TheraSystemID {
-				sigID = strings.TrimSpace(sig.InSignature)
-				if sigID == "" {
-					sigID = strings.TrimSpace(sig.OutSignature)
-				}
-			} else if inSystemID == TheraSystemID {
-				sigID = strings.TrimSpace(sig.OutSignature)
-				if sigID == "" {
-					sigID = strings.TrimSpace(sig.InSignature)
-				}
-			} else {
-				sigID = strings.TrimSpace(sig.InSignature)
-				if sigID == "" {
-					sigID = strings.TrimSpace(sig.OutSignature)
-				}
-			}
-			if sigID == "" {
-				sigID = strings.TrimSpace(sig.SignatureID) // Legacy fallback
-			}
-			if sigID == "" {
-				sigID = getStringFromInterface(sig.ID)
-			}
+		// Extract both signature IDs from the API response.
+		// - WH in k-space leading TO Thera: InSignature is k-space side, OutSignature is Thera side.
+		// - WH in Thera leading outward: InSignature is Thera side, OutSignature is k-space side.
+		// The API can report the same connection from either (or both) directions,
+		// so we store both and merge when the other direction also exists.
+		kspaceSig := strings.TrimSpace(sig.InSignature)
+		theraSig := strings.TrimSpace(sig.OutSignature)
+		if inSystemID == TheraSystemID {
+			// WH scanned in Thera, leads outward to k-space
+			kspaceSig, theraSig = theraSig, kspaceSig
+		}
+		// Fallback: try legacy fields
+		if kspaceSig == "" {
+			kspaceSig = strings.TrimSpace(sig.SignatureID)
+		}
+		if kspaceSig == "" {
+			kspaceSig = getStringFromInterface(sig.ID)
+		}
 
 			// Determine which system connects to Thera
 			// If out_system_id == Thera, then in_system_id connects to Thera
@@ -830,11 +825,33 @@ func (rf *RouteFinder) fetchTheraSignatures() {
 
 			// EOL: use API eol/wh_eol if present, or derive from expires_at (< 4h left)
 			isEOL := sig.EOL || sig.EOLAlt || isEOLFromExpiresAt(sig.ExpiresAt)
-			data.TheraSignatures[systemConnectingToThera] = TheraSignatureInfo{
-				SignatureID: sigID,
-				WhType:      sig.WhType,
-				MaxShipSize: maxShipSize,
-				IsEOL:       isEOL,
+
+			// Merge with existing entry — the API can report the same wormhole
+			// from both directions (scanned in Thera and scanned in k-space).
+			// Each direction provides half the picture, so we merge them.
+			if existing, ok := data.TheraSignatures[systemConnectingToThera]; ok {
+				if existing.SignatureID == "" {
+					existing.SignatureID = kspaceSig
+				}
+				if existing.TheraSignatureID == "" {
+					existing.TheraSignatureID = theraSig
+				}
+				if whType := strings.TrimSpace(sig.WhType); whType != "" {
+					existing.WhType = whType
+				}
+				if existing.MaxShipSize == "" || existing.MaxShipSize == "Capital" {
+					existing.MaxShipSize = maxShipSize
+				}
+				existing.IsEOL = existing.IsEOL || isEOL
+				data.TheraSignatures[systemConnectingToThera] = existing
+			} else {
+				data.TheraSignatures[systemConnectingToThera] = TheraSignatureInfo{
+					SignatureID:      kspaceSig,
+					TheraSignatureID: theraSig,
+					WhType:           strings.TrimSpace(sig.WhType),
+					MaxShipSize:      maxShipSize,
+					IsEOL:            isEOL,
+				}
 			}
 
 			// Add bidirectional Thera connections to adjacency list
@@ -1039,27 +1056,30 @@ func (rf *RouteFinder) GetTheraSignatureInfoForRoute(path []int) (string, bool) 
 // GetTheraSignatureIDsForRoute returns signature IDs for inbound and outbound Thera wormholes
 // used by the provided route path.
 //
-// - inboundSig: signature ID in the system right BEFORE Thera in the path
-// - outboundSig: signature ID in the system right AFTER Thera in the path
+// - inboundSig: signature ID in the system right BEFORE Thera that leads into Thera
+// - outboundSig: signature ID in Thera itself that leads to the system right AFTER Thera
 //
 // eol is true if either signature is marked as End-of-Life.
 func (rf *RouteFinder) GetTheraSignatureIDsForRoute(path []int) (inboundSig, outboundSig string, eol bool) {
 	readFn := rf.graphData.Read()
 	data := readFn()
 
-	// Outbound: Thera -> X (signature is in X)
+	// Outbound: Thera -> X (user is in Thera, needs the Thera-side signature)
 	for i := 1; i < len(path); i++ {
 		if path[i-1] == TheraSystemID {
 			systemID := path[i]
 			if sigInfo, exists := data.TheraSignatures[systemID]; exists {
-				outboundSig = sigInfo.SignatureID
+				outboundSig = sigInfo.TheraSignatureID
+				if outboundSig == "" {
+					outboundSig = sigInfo.SignatureID
+				}
 				eol = eol || sigInfo.IsEOL
 			}
 			break
 		}
 	}
 
-	// Inbound: X -> Thera (signature is in X)
+	// Inbound: X -> Thera (user is in X, needs the k-space-side signature)
 	for i := 0; i < len(path)-1; i++ {
 		if path[i+1] == TheraSystemID {
 			systemID := path[i]
@@ -1114,10 +1134,11 @@ func (rf *RouteFinder) SetMockTheraSignaturesWithWhType(signatures map[int]strin
 				}
 			}
 			data.TheraSignatures[systemID] = TheraSignatureInfo{
-				SignatureID: sigName,
-				WhType:      whType,
-				MaxShipSize: maxShipSize,
-				IsEOL:       isEOL,
+				SignatureID:      sigName,
+				TheraSignatureID: sigName,
+				WhType:           whType,
+				MaxShipSize:      maxShipSize,
+				IsEOL:            isEOL,
 			}
 
 			// Add bidirectional Thera connections to adjacency list

@@ -610,17 +610,27 @@ func TestFetchTheraSignatures_SignatureIDFieldByDirection(t *testing.T) {
 
 	readFn := rf.graphData.Read()
 	data := readFn()
+
+	// Jita → Thera (k-space entry): SignatureID is k-space side, TheraSignatureID is Thera side
 	if got := data.TheraSignatures[jitaID].SignatureID; got != "KSPACE-IN" {
-		t.Errorf("k-space→Thera: want SignatureID KSPACE-IN, got %q", got)
+		t.Errorf("k-space→Thera SignatureID: want KSPACE-IN, got %q", got)
 	}
+	if got := data.TheraSignatures[jitaID].TheraSignatureID; got != "THERA-SIDE-WRONG" {
+		t.Errorf("k-space→Thera TheraSignatureID: want THERA-SIDE-WRONG, got %q", got)
+	}
+
+	// Thera → Rens (Thera entry): SignatureID is k-space side, TheraSignatureID is Thera side
 	if got := data.TheraSignatures[rensID].SignatureID; got != "KSPACE-OUT" {
-		t.Errorf("Thera→k-space: want SignatureID KSPACE-OUT, got %q", got)
+		t.Errorf("Thera→k-space SignatureID: want KSPACE-OUT, got %q", got)
+	}
+	if got := data.TheraSignatures[rensID].TheraSignatureID; got != "THERA-SIDE" {
+		t.Errorf("Thera→k-space TheraSignatureID: want THERA-SIDE, got %q", got)
 	}
 
 	path := []int{jitaID, TheraSystemID, rensID}
 	inSig, outSig, _ := rf.GetTheraSignatureIDsForRoute(path)
-	if inSig != "KSPACE-IN" || outSig != "KSPACE-OUT" {
-		t.Errorf("GetTheraSignatureIDsForRoute: want in=%q out=%q, got in=%q out=%q", "KSPACE-IN", "KSPACE-OUT", inSig, outSig)
+	if inSig != "KSPACE-IN" || outSig != "THERA-SIDE" {
+		t.Errorf("GetTheraSignatureIDsForRoute: want in=%q out=%q, got in=%q out=%q", "KSPACE-IN", "THERA-SIDE", inSig, outSig)
 	}
 }
 
