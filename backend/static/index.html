@@ -520,6 +520,29 @@
                 letter-spacing: 0.5px;
                 margin-bottom: 0.375rem;
             }
+            #result .attackers-table {
+                display: table;
+                width: 100%;
+            }
+            #result .attackers-table tbody {
+                display: table-row-group;
+            }
+            #result .attackers-table tr {
+                display: table-row;
+                border: none;
+                margin-bottom: 0;
+                border-radius: 0;
+            }
+            #result .attackers-table td {
+                display: table-cell !important;
+                padding: 0.125rem 0.125rem !important;
+                border: none !important;
+                vertical-align: middle;
+            }
+            #result .attackers-table td::before {
+                display: none;
+                content: none;
+            }
         }
         @media (max-width: 400px) {
             #app-header h1 {
