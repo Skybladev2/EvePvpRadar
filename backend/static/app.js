@@ -66,6 +66,19 @@ let initialLoadDone = false;
 // Store current location to restore when switching back to proximity mode
 let currentLocationData = null; // { systemID, systemName }
 
+// Suppress CSS [data-tooltip] tooltips in a container (mobile sticky hover fix).
+// Temporarily removes the data-tooltip attribute so the :hover pseudo-element disappears.
+function hideTooltipsIn(container) {
+  if (!container) return;
+  container.querySelectorAll('[data-tooltip]').forEach(el => {
+    const saved = el.getAttribute('data-tooltip');
+    el.removeAttribute('data-tooltip');
+    setTimeout(() => {
+      if (saved) el.setAttribute('data-tooltip', saved);
+    }, 150);
+  });
+}
+
 // Shared logic for attackers-toggle (show)/(hide) clicks.
 // Called by both the early pre-DOMContentLoaded delegation and the later bindEventHandlers delegation.
 function handleAttackersToggle(toggle) {
@@ -280,6 +293,7 @@ function bindEventHandlers() {
         if (routeContainer) {
           routeContainer.classList.toggle("expanded");
         }
+        hideTooltipsIn(cell);
       }
     }
 
@@ -358,6 +372,9 @@ function bindEventHandlers() {
       e.preventDefault();
       e.stopPropagation();
       handleAttackersToggle(attackersToggle);
+      var toggleTargetId = attackersToggle.getAttribute("data-target");
+      var toggleTarget = toggleTargetId && document.getElementById(toggleTargetId);
+      if (toggleTarget) hideTooltipsIn(toggleTarget);
       return;
     }
     
@@ -370,6 +387,11 @@ function bindEventHandlers() {
         // Scroll to element smoothly without changing URL hash
         targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
+    }
+
+    // Hide tooltip on any [data-tooltip] element click (mobile sticky hover fix)
+    if (e.target && e.target.hasAttribute && e.target.hasAttribute('data-tooltip')) {
+      hideTooltipsIn(e.target);
     }
   });
 
@@ -521,10 +543,20 @@ function bindTheraFloatingTooltips(theraCampsContainer) {
     }, 60); // small delay to avoid flicker when moving between elements
   }
 
+  function hide() {
+    if (hideTimer) clearTimeout(hideTimer);
+    activeTarget = null;
+    tooltipEl.classList.remove("is-visible");
+    tooltipEl.setAttribute("aria-hidden", "true");
+  }
+
   tooltipTargets.forEach(target => {
     target.addEventListener("mouseenter", () => show(target));
     target.addEventListener("mouseleave", () => {
       if (activeTarget === target) scheduleHide();
+    });
+    target.addEventListener("click", () => {
+      if (activeTarget === target) hide();
     });
   });
 
