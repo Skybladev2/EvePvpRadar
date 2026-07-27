@@ -38,7 +38,8 @@ ARG STATICCHECK_VERSION=v0.7.0
 ARG OSV_SCANNER_VERSION=v1
 
 RUN go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./... && \
-    go run github.com/google/osv-scanner/cmd/osv-scanner@${OSV_SCANNER_VERSION} --lockfile go.mod && \
+    go run github.com/google/osv-scanner/cmd/osv-scanner@${OSV_SCANNER_VERSION} --lockfile go.mod
+RUN go clean -cache && \
     go build -ldflags="-s -w -X main.commit=$IMAGE_TAG" -o backend .
 
 # Runtime stage (scratch: empty image, minimal size)

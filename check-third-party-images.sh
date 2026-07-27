@@ -160,9 +160,6 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-# SOCKS5 proxy support (uses BUILD_SOCKS5_PROXY to avoid clashing with
-# SOCKS5_PROXY which is used by service containers in docker-compose and
-# references host.docker.internal). Requires PySocks.
 _socks5_proxy = os.environ.get("BUILD_SOCKS5_PROXY", "").strip()
 if _socks5_proxy:
     try:
@@ -172,79 +169,122 @@ if _socks5_proxy:
         _proxy_url = _socks5_proxy
         for _prefix in ("socks5h://", "socks5://", "socks://"):
             if _proxy_url.startswith(_prefix):
-                _proxy_url = _proxy_url[len(_prefix) :]
+                _proxy_url = _proxy_url[len(_prefix):]
                 break
         _host, _port_str = _proxy_url.rsplit(":", 1)
         _port = int(_port_str)
         _socks.set_default_proxy(_socks.SOCKS5, _host, _port)
         _socket.socket = _socks.socksocket
     except ImportError:
-        print(
-            "WARNING: BUILD_SOCKS5_PROXY is set but PySocks is not installed (pip install PySocks)",
-            file=sys.stderr,
-        )
+        print("WARNING: BUILD_SOCKS5_PROXY is set but PySocks is not installed (pip install PySocks)", file=sys.stderr)
     except Exception as _e:
-        print(
-            f"WARNING: failed to configure SOCKS5 proxy {_socks5_proxy}: {_e}",
-            file=sys.stderr,
-        )
+        print(f"WARNING: failed to configure SOCKS5 proxy {_socks5_proxy}: {_e}", file=sys.stderr)
+
+def _parse_ts(s):
+    s = s.replace("Z", "+00:00")
+    dot = s.find(".")
+    if dot != -1:
+        i = dot + 1
+        while i < len(s) and s[i].isdigit():
+            i += 1
+        frac = s[dot + 1 : i]
+        if len(frac) != 6:
+            s = s[: dot + 1] + frac[:6].ljust(6, "0") + s[i:]
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        pass
+    for sep in ("+", "-"):
+        idx = s.rfind(sep)
+        if idx > 19:
+            s = s[:idx]
+            break
+    return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
 
 repo = sys.argv[1]
 tag_name = sys.argv[2]
 current_digest = sys.argv[3]
 min_age_days = int(sys.argv[4])
+cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
 
-enc_tag = urllib.parse.quote(tag_name, safe="")
-url = f"https://hub.docker.com/v2/repositories/{repo}/tags/{enc_tag}/"
-
-try:
-    with urllib.request.urlopen(url, timeout=30) as resp:
-        data = json.load(resp)
-except urllib.error.HTTPError as e:
-    print(f"error\tHTTP {e.code} fetching {url}", file=sys.stderr)
-    sys.exit(1)
-
-remote_digest = (data.get("digest") or "").strip()
-
-if not remote_digest:
-    print("error\tno digest in Docker Hub response", file=sys.stderr)
-    sys.exit(1)
-
-if remote_digest == current_digest:
-    print("unchanged")
-    sys.exit(0)
-
-# The tag's push time is often recent (especially for "latest").
-# Find the oldest push across ALL tags that share this digest
-# so we know how long this image version has truly been available.
-oldest_push = None
 list_url = f"https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=100"
 try:
     with urllib.request.urlopen(list_url, timeout=30) as resp:
         all_tags = json.load(resp).get("results", [])
-    for t in all_tags:
-        if (t.get("digest") or "").strip() == remote_digest:
-            pushed = t.get("tag_last_pushed") or t.get("last_updated") or ""
-            if pushed:
-                try:
-                    ts = datetime.fromisoformat(pushed.replace("Z", "+00:00"))
-                    if oldest_push is None or ts < oldest_push:
-                        oldest_push = ts
-                except ValueError:
-                    pass
-except Exception:
-    # If listing fails, fall back to the single-tag timestamp
-    pass
+except urllib.error.HTTPError as e:
+    print(f"error\tHTTP {e.code} fetching tags for {repo}", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"error\tfailed to list tags for {repo}: {e}", file=sys.stderr)
+    sys.exit(1)
+
+if not all_tags:
+    print(f"error\tno tags found for {repo}", file=sys.stderr)
+    sys.exit(1)
+
+digest_pushes = {}
+for t in all_tags:
+    d = (t.get("digest") or "").strip()
+    pushed = t.get("tag_last_pushed") or t.get("last_updated") or ""
+    if d and pushed:
+        if d not in digest_pushes or pushed < digest_pushes[d]:
+            digest_pushes[d] = pushed
+
+sorted_items = sorted(digest_pushes.items(), key=lambda x: x[1])
+
+current_idx = None
+for i, (d, _) in enumerate(sorted_items):
+    if d == current_digest:
+        current_idx = i
+        break
+
+if current_idx is not None and current_idx < len(sorted_items) - 1:
+    next_digest, next_pushed = sorted_items[current_idx + 1]
+    next_ts = _parse_ts(next_pushed)
+    if next_ts <= cutoff:
+        print(f"ok\t{next_digest}")
+    else:
+        print(f"too_new\t{next_digest}\t{next_pushed}")
+    sys.exit(0)
+
+# current_digest not found or is the newest — check if the tag itself changed
+enc_tag = urllib.parse.quote(tag_name, safe="")
+url = f"https://hub.docker.com/v2/repositories/{repo}/tags/{enc_tag}/"
+try:
+    with urllib.request.urlopen(url, timeout=30) as resp:
+        tag_data = json.load(resp)
+except urllib.error.HTTPError as e:
+    print(f"error\tHTTP {e.code} fetching {url}", file=sys.stderr)
+    sys.exit(1)
+
+remote_digest = (tag_data.get("digest") or "").strip()
+if not remote_digest:
+    print("error\tno digest in Docker Hub response", file=sys.stderr)
+    sys.exit(1)
+if remote_digest == current_digest:
+    print("unchanged")
+    sys.exit(0)
+
+oldest_push = None
+for t in all_tags:
+    if (t.get("digest") or "").strip() == remote_digest:
+        pushed = t.get("tag_last_pushed") or t.get("last_updated") or ""
+        if pushed:
+            try:
+                ts = _parse_ts(pushed)
+                if oldest_push is None or ts < oldest_push:
+                    oldest_push = ts
+            except ValueError:
+                pass
 
 if oldest_push is None:
-    pushed_val = data.get("tag_last_pushed") or data.get("last_updated") or ""
+    pushed_val = tag_data.get("tag_last_pushed") or tag_data.get("last_updated") or ""
     if pushed_val:
         try:
-            oldest_push = datetime.fromisoformat(pushed_val.replace("Z", "+00:00"))
+            oldest_push = _parse_ts(pushed_val)
         except ValueError:
             oldest_push = None
 
-cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
 if oldest_push is None or oldest_push > cutoff:
     reason = "unknown age" if oldest_push is None else oldest_push.isoformat()
     print(f"too_new\t{remote_digest}\t{reason}")
@@ -342,67 +382,87 @@ check_one() {
   local tag="$3"
   local current_digest="$4"
 
-  local pull_ref candidate_digest candidate_ref
-
   echo "Starting image check: ${name}"
 
-  local gate_line gate_status
-  gate_line="$(dockerhub_tag_update_gate "$repo" "$tag" "$current_digest" "$THIRD_PARTY_IMAGE_MIN_AGE_DAYS")" || {
-    echo "WARNING: Docker Hub metadata lookup failed for ${name} (${repo}:${tag}); skipping this image for now"
-    skipped_updates+=("${name}|docker hub metadata lookup failed")
-    return 0
-  }
-  gate_status="${gate_line%%$'\t'*}"
-  case "$gate_status" in
-    unchanged)
-      echo "Checking ${name}: ${repo}:${tag}"
-      echo "  - digest unchanged on Docker Hub"
+  local updates_applied=0
+  local first_applied_digest=""
+
+  while true; do
+    local gate_line gate_status
+    gate_line="$(dockerhub_tag_update_gate "$repo" "$tag" "$current_digest" "$THIRD_PARTY_IMAGE_MIN_AGE_DAYS")" || {
+      echo "WARNING: Docker Hub metadata lookup failed for ${name} (${repo}:${tag}); skipping this image for now"
+      local remaining=()
+      for item in "${safe_updates[@]}"; do
+        [[ "$item" != "${name}|"* ]] && remaining+=("$item")
+      done
+      safe_updates=("${remaining[@]}")
+      skipped_updates+=("${name}|docker hub metadata lookup failed")
       return 0
-      ;;
-    too_new)
-      local remote_digest pushed_info
-      IFS=$'\t' read -r gate_status remote_digest pushed_info <<<"$gate_line"
-      echo "Checking ${name}: ${repo}:${tag}"
-      echo "  - skipped: new digest ${remote_digest} (oldest tag with this digest pushed at ${pushed_info}); not yet ${THIRD_PARTY_IMAGE_MIN_AGE_DAYS} days old"
-      return 0
-      ;;
-    ok)
-      ;;
-    *)
-      echo "WARNING: unexpected gate status from Docker Hub helper for ${name}: ${gate_line}; skipping this image for now"
-      skipped_updates+=("${name}|unexpected docker hub gate status")
-      return 0
-      ;;
-  esac
-  pull_ref="${repo}:${tag}"
-  echo "Checking ${name}: ${pull_ref} (digest changed; oldest tag with this digest is at least ${THIRD_PARTY_IMAGE_MIN_AGE_DAYS} days old)"
+    }
+    gate_status="${gate_line%%$'\t'*}"
+    case "$gate_status" in
+      unchanged)
+        if [ "$updates_applied" -eq 0 ]; then
+          echo "Checking ${name}: ${repo}:${tag}"
+          echo "  - digest unchanged on Docker Hub"
+        fi
+        break
+        ;;
+      too_new)
+        local remote_digest pushed_info
+        IFS=$'\t' read -r gate_status remote_digest pushed_info <<<"$gate_line"
+        if [ "$updates_applied" -eq 0 ]; then
+          echo "Checking ${name}: ${repo}:${tag}"
+        fi
+        echo "  - next digest ${remote_digest} (pushed ${pushed_info}) is not yet ${THIRD_PARTY_IMAGE_MIN_AGE_DAYS} days old; updates caught up"
+        break
+        ;;
+      ok)
+        local candidate_digest
+        IFS=$'\t' read -r gate_status candidate_digest <<<"$gate_line"
+        local candidate_ref="${repo}@${candidate_digest}"
 
-  echo "  - pulling ${pull_ref}"
-  docker pull "$pull_ref" >/dev/null
+        if [ -n "$first_applied_digest" ] && [ "$candidate_digest" = "$first_applied_digest" ]; then
+          echo "  - all available digests processed; caught up to latest known image"
+          break
+        fi
 
-  candidate_digest="$(extract_digest "$pull_ref")"
-  candidate_ref="${repo}@${candidate_digest}"
+        if [ "$updates_applied" -eq 0 ]; then
+          echo "Checking ${name}: ${repo}:${tag}"
+        fi
+        echo "  - candidate digest: ${candidate_digest}"
 
-  if [ "$candidate_digest" = "$current_digest" ]; then
-    echo "  - no digest change (current: ${pull_ref} @ ${candidate_digest})"
-    return 0
-  fi
+        docker pull "$candidate_ref" >/dev/null
 
-  echo "  - new version found for ${name}: ${pull_ref}"
-  echo "  - new digest: ${candidate_digest}"
+        if ! scan_candidate_for_malware "$candidate_ref"; then
+          echo "  - unsafe: malware scan failed"
+          unsafe_updates+=("${name}|${candidate_digest}|clamav malware scan failed")
+          return 0
+        fi
 
-  if ! scan_candidate_for_malware "$candidate_ref"; then
-    echo "  - unsafe: malware scan failed"
-    unsafe_updates+=("${name}|${candidate_digest}|clamav malware scan failed")
-    return 0
-  fi
+        if [ "$ENABLE_MALWARE_SCAN" = "1" ]; then
+          echo "  - safe: malware scan passed"
+        else
+          echo "  - safe: digest accepted (malware scan disabled)"
+        fi
 
-  if [ "$ENABLE_MALWARE_SCAN" = "1" ]; then
-    echo "  - safe: malware scan passed"
-  else
-    echo "  - safe: digest accepted (malware scan disabled)"
-  fi
-  safe_updates+=("${name}|${candidate_digest}")
+        safe_updates+=("${name}|${candidate_digest}")
+        [ -z "$first_applied_digest" ] && first_applied_digest="$candidate_digest"
+        current_digest="$candidate_digest"
+        updates_applied="$((updates_applied + 1))"
+        ;;
+      *)
+        echo "WARNING: unexpected gate status from Docker Hub helper for ${name}: ${gate_line}; skipping this image for now"
+        local remaining=()
+        for item in "${safe_updates[@]}"; do
+          [[ "$item" != "${name}|"* ]] && remaining+=("$item")
+        done
+        safe_updates=("${remaining[@]}")
+        skipped_updates+=("${name}|unexpected docker hub gate status")
+        return 0
+        ;;
+    esac
+  done
 }
 
 safe_updates=()
