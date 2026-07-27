@@ -708,6 +708,18 @@ func loadAppJS() {
 	appJS = template.JS(data) // #nosec G204 -- embedded static
 }
 
+// pageStyles holds the minified content of static/styles.css wrapped in a <style> tag.
+var pageStyles template.HTML
+
+func loadPageStyles() {
+	data, err := staticFS.ReadFile("static/styles.css")
+	if err != nil {
+		log.Printf("Warning: could not read embedded styles.css: %v", err)
+		return
+	}
+	pageStyles = template.HTML("<style>" + string(data) + "</style>") // #nosec G203 -- embedded static
+}
+
 // containerTag returns the IMAGE_TAG from env, falling back to the ldflags commit value.
 func containerTag() string {
 	if tag := os.Getenv("IMAGE_TAG"); tag != "" {
@@ -7271,6 +7283,7 @@ func main() {
 
 	fmt.Fprintln(mw, "Starting up in: ", filepath.Dir(os.Args[0])) // #nosec G705 -- log output, not HTML
 	loadAppJS()
+	loadPageStyles()
 	startup(mw)
 
 	// Fetch Thera signatures immediately on startup (without delay)
@@ -7600,6 +7613,7 @@ func main() {
 			"ShipIconsStyle":          getShipIconsEmbeddedStyle(),
 			"MilitiaIconsStyle":       getMilitiaIconsEmbeddedStyle(),
 			"TradeHubFilterCSS":       renderTradeHubFilterCSS(),
+			"PageStyles":              pageStyles,
 			"LoginImageLargeDataURI":  loginImageLargeDataURI,
 			"LoginImageSmallDataURI":  loginImageSmallDataURI,
 			"DonateURL":               donateURL,
@@ -7695,6 +7709,7 @@ func main() {
 			"ShipIconsStyle":          getShipIconsEmbeddedStyle(),
 			"MilitiaIconsStyle":       getMilitiaIconsEmbeddedStyle(),
 			"TradeHubFilterCSS":       renderTradeHubFilterCSS(),
+			"PageStyles":              pageStyles,
 			"LoginImageLargeDataURI":  loginImageLargeDataURI,
 			"LoginImageSmallDataURI":  loginImageSmallDataURI,
 			"DonateURL":               donateURL,
