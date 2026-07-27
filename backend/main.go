@@ -2651,7 +2651,7 @@ func isKillWithinStargateRange(killmail *zkillboardcache.CachedKillmail) bool {
 }
 
 // isValidKillmail checks if a killmail is valid for precalculation
-// Valid means: lowsec/nullsec system (or Pochven, or Thera), within 1000km of a stargate or station.
+// Valid means: lowsec/nullsec system (or Pochven, or Thera), within 1000km of a stargate, or highsec station with opposing militia.
 // Thera has no stargates, so Thera kills are valid if they have position data.
 // Includes all kills (ships, pods, structures, etc.) as they indicate enemy presence
 // Pochven is included because it makes sense in proximity mode.
@@ -2752,16 +2752,6 @@ func isValidKillmail(killmail *zkillboardcache.CachedKillmail) (bool, bool) {
 	)
 	if err == nil && isWithinRange {
 		return true, false
-	}
-
-	// Not near a stargate — check station proximity for lowsec/nullsec
-	if killmail.Victim.Position == nil {
-		return false, false
-	}
-	killPos := [3]float64{killmail.Victim.Position.X, killmail.Victim.Position.Y, killmail.Victim.Position.Z}
-	dist, _, _ := findNearestStationDistance(killmail.SolarSystemID, killPos)
-	if dist > 0 {
-		return true, true
 	}
 
 	return false, false
@@ -3883,6 +3873,29 @@ func loadMockData(mw io.Writer) {
 		systemStationsMu.Unlock()
 	}
 
+	// Lowsec mock station in Tama — kills here are invalid (lowsec station kills rejected by isValidKillmail)
+	// Kept as mock data to verify filtering correctly excludes them.
+	lowsecStationID := 64000000
+	lowsecStationPos := [3]float64{1e9, 0, 0}
+	lowsecStation := StationSDE{
+		StationID: lowsecStationID,
+		SystemID:  lowsecSystem1,
+		Name:      "Tama IV - Moon 1 - Mock Station",
+		Position:  lowsecStationPos,
+	}
+	stationsByIDMu.Lock()
+	if stationsByID == nil {
+		stationsByID = make(map[int]StationSDE)
+	}
+	stationsByID[lowsecStationID] = lowsecStation
+	stationsByIDMu.Unlock()
+	systemStationsMu.Lock()
+	if systemStations == nil {
+		systemStations = make(map[int][]int)
+	}
+	systemStations[lowsecSystem1] = append(systemStations[lowsecSystem1], lowsecStationID)
+	systemStationsMu.Unlock()
+
 	// Per-system attacker faction compositions for highsec mock kills.
 	// Opposing pair = both factions are enemies (Caldari↔Gallente, Amarr↔Minmatar).
 	// Same faction or NPC-only = not opposing.
@@ -3940,6 +3953,7 @@ func loadMockData(mw io.Writer) {
 	// Generate mock killmails
 	// We need to ensure all cases are covered:
 	// - Lowsec and nullsec systems
+	// - Invalid lowsec station kill (should be filtered out by isValidKillmail)
 	// - 1, 2, and 3 kills per system
 	// - < 10 and >= 10 attackers
 	// - Routes: stargates only, Thera only, Zarzakh only, both Thera and Zarzakh
@@ -4748,6 +4762,100 @@ func loadMockData(mw io.Writer) {
 	}
 	log.Printf("Added 2 mock Thera camp kills (dictors + NPC Serpentis Captain + sentry)")
 
+	// Lowsec station kill in Tama — should be rejected by isValidKillmail (lowsec kills must be at stargates)
+	// Included as mock data to verify filtering correctly excludes station kills outside highsec.
+	tamaStationKillmailID := 100200
+	tamaStationKillTime := baseTime.Add(10 * time.Minute)
+	tamaStationKillPos := [3]float64{1e9 + 500, 0, 0}
+
+	assignShipType(1000200, nil)
+	assignShipType(1000201, nil)
+	assignShipType(5000200, nil)
+
+	tamaStationAttackers := []zkillboardcache.ESIAttacker{
+		{
+			CharacterID:    1000200,
+			CorporationID:  2000200,
+			AllianceID:     3000200,
+			SecurityStatus: -1.5,
+			DamageDone:     8000,
+			FinalBlow:      true,
+			WeaponTypeID:   2456,
+			ShipTypeID:     characterIDToShipTypeID[1000200],
+		},
+		{
+			CharacterID:    1000201,
+			CorporationID:  2000201,
+			AllianceID:     3000201,
+			SecurityStatus: -2.0,
+			DamageDone:     2000,
+			FinalBlow:      false,
+			WeaponTypeID:   2456,
+			ShipTypeID:     characterIDToShipTypeID[1000201],
+		},
+		{
+			CharacterID: 0, CorporationID: 0, AllianceID: 0, SecurityStatus: 0,
+			DamageDone: 400, FinalBlow: false, WeaponTypeID: 2456,
+			ShipTypeID: mockNPCAttackerShipTypeID,
+		},
+		{
+			CharacterID: 0, CorporationID: 0, AllianceID: 0, SecurityStatus: 0,
+			DamageDone: 200, FinalBlow: false, WeaponTypeID: 2456,
+			ShipTypeID: mockNPCAttackerSentryTypeID,
+		},
+	}
+	setMockCharacterName(1000200)
+	setMockCharacterName(1000201)
+	setMockCharacterName(5000200)
+	tamaStationVictim := zkillboardcache.ESIVictim{
+		CharacterID:   5000200,
+		CorporationID: 6000200,
+		AllianceID:    7000200,
+		DamageTaken:   10000,
+		ShipTypeID:    characterIDToShipTypeID[5000200],
+		Position: &struct {
+			X float64 `json:"x"`
+			Y float64 `json:"y"`
+			Z float64 `json:"z"`
+		}{
+			X: tamaStationKillPos[0],
+			Y: tamaStationKillPos[1],
+			Z: tamaStationKillPos[2],
+		},
+	}
+	tamaStationZKB := zkillboardcache.ZKillboardKill{
+		KillmailID: tamaStationKillmailID,
+		ZKB: zkillboardcache.ZKillboardKillInfo{
+			LocationID:     lowsecStationID,
+			Hash:           "mockhash100200",
+			FittedValue:    3000000.0,
+			DroppedValue:   1500000.0,
+			DestroyedValue: 1500000.0,
+			TotalValue:     6000000.0,
+			Points:         8,
+			NPC:            false,
+			Solo:           false,
+			AWOX:           false,
+			Labels:         []string{},
+		},
+	}
+	tamaStationCached := zkillboardcache.CachedKillmail{
+		KillmailID:    tamaStationKillmailID,
+		KillmailTime:  tamaStationKillTime.Format("2006-01-02T15:04:05Z"),
+		Victim:        tamaStationVictim,
+		Attackers:     tamaStationAttackers,
+		ZKBInfo:       tamaStationZKB,
+		SolarSystemID: lowsecSystem1,
+	}
+	killmailCache.AddKillmail(tamaStationKillmailID, &tamaStationCached)
+	calculateDataForKillmail(tamaStationKillmailID, &tamaStationCached)
+
+	systemKills[lowsecSystem1] = append(systemKills[lowsecSystem1], struct {
+		killmailID    int
+		attackerCount int
+		timeOffset    time.Duration
+	}{tamaStationKillmailID, 4, 10 * time.Minute})
+
 	totalKills := 0
 	systemCount := 0
 	lowsecCount := 0
@@ -4789,6 +4897,7 @@ func loadMockData(mw io.Writer) {
 	fmt.Fprintf(mw, "  - Zarzakh only: System 3\n")
 	fmt.Fprintf(mw, "  - Both Thera and Zarzakh: System 4\n")
 	fmt.Fprintf(mw, "  - Thera camp: 2 kills in Thera with Interdictors (Sabre, Eris), >10k km from stations\n")
+	fmt.Fprintf(mw, "  - Lowsec station kill (Tama): 1 kill at station — should be rejected by isValidKillmail (lowsec kills must be at stargates)\n")
 }
 
 // displayEveSecurityForUI maps SDE true security to the one-decimal value used for EVE-style UI.
