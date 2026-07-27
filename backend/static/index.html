@@ -173,6 +173,7 @@
       if (theraHeader) { var c = theraHeader.closest("#thera-camps-container"); if (c) c.classList.toggle("thera-camps-collapsed"); return; }
     });
     // Restore saved filter checkbox states before the results table is parsed (CSS :has() filters).
+    // Also inject max attackers CSS :has() rules so rows are hidden before the table renders.
     (function() {
       try {
         var saved = localStorage.getItem('evePvpSearchFilters');
@@ -187,6 +188,17 @@
         if (state.maxAttackers !== undefined) {
           var display = document.getElementById('max-attackers-display');
           if (display) display.textContent = state.maxAttackers < 1 ? 'unbound' : String(state.maxAttackers);
+          var limit = parseInt(state.maxAttackers, 10);
+          if (limit >= 1) {
+            var style = document.createElement('style');
+            style.id = 'max-attackers-style';
+            var rules = [];
+            for (var n = limit + 1; n <= 100; n++) {
+              rules.push('tr:has(.killmail-row[data-attacker-count="' + n + '"]){display:none!important}');
+            }
+            style.textContent = rules.join('');
+            document.head.appendChild(style);
+          }
         }
         var hubs = Array.isArray(state.hiddenTradeHubs) ? state.hiddenTradeHubs : [];
         var hiddenSet = {};

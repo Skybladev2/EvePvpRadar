@@ -1296,6 +1296,7 @@ function restoreFilterState() {
     if (filterGatecamps && state.filterGatecamps !== undefined) filterGatecamps.checked = state.filterGatecamps;
     if (state.maxAttackers !== undefined) {
       maxAttackersLimit = state.maxAttackers;
+      updateMaxAttackersStyle(maxAttackersLimit);
       const display = document.getElementById("max-attackers-display");
       if (display) {
         display.textContent = maxAttackersLimit < 1 ? "unbound" : String(maxAttackersLimit);
@@ -1620,9 +1621,10 @@ document.addEventListener("click", function(e) {
   }
 });
 
-// Update max attackers control display and re-apply filters
+// Update max attackers control display, CSS style, and re-apply filters
 function setMaxAttackersLimit(value) {
   maxAttackersLimit = value;
+  updateMaxAttackersStyle(value);
   const display = document.getElementById("max-attackers-display");
   if (display) {
     display.textContent = maxAttackersLimit < 1 ? "unbound" : maxAttackersLimit;
@@ -1651,8 +1653,26 @@ function applyMilitiaFilter() {
 
 // Apply security filters based on checkbox states
 // Lowsec, nullsec, trade hub, and gatecamp row visibility is handled by CSS :has() rules.
-// This function handles pilot-only, max attackers (JS class-based)
-// and counts all hidden rows for the filter indicator.
+// Inject/update a <style> block with :has() CSS rules for attacker counts > limit.
+// CSS rules handle the actual row hiding (same approach as lowsec/nullsec/trade hub filters).
+function updateMaxAttackersStyle(limit) {
+  let style = document.getElementById("max-attackers-style");
+  if (!style) {
+    style = document.createElement("style");
+    style.id = "max-attackers-style";
+    document.head.appendChild(style);
+  }
+  if (limit < 1) {
+    style.textContent = "";
+    return;
+  }
+  const rules = [];
+  for (let n = limit + 1; n <= 100; n++) {
+    rules.push('tr:has(.killmail-row[data-attacker-count="' + n + '"]){display:none!important}');
+  }
+  style.textContent = rules.join("");
+}
+
 function applySecurityFilters() {
   applyMilitiaFilter();
 
@@ -1715,9 +1735,23 @@ function applySecurityFilters() {
     });
   }
 
+  // Count rows hidden by CSS max attackers rule for the indicator.
+  let hiddenByMaxAttackers = 0;
+  if (maxAttackersLimit > 0) {
+    for (let i = 0; i < allRows.length; i++) {
+      const row = allRows[i];
+      const kmRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
+      for (let k = 0; k < kmRows.length; k++) {
+        if (parseInt(kmRows[k].getAttribute("data-attacker-count") || "0", 10) > maxAttackersLimit) {
+          hiddenByMaxAttackers++;
+          break;
+        }
+      }
+    }
+  }
+
   let hiddenByPilot = 0;
   let hiddenByGatecamps = 0;
-  let hiddenByMaxAttackers = 0;
   let gatecampHidSelectedPilotRows = false;
   const hiddenSystemsForSelectedPilots = new Set();
 
@@ -1747,35 +1781,20 @@ function applySecurityFilters() {
     }
   }
 
-  const jsFiltersActive = maxAttackersLimit >= 1 || pilotOnlyCharacterIds.size > 0;
-
-  if (!jsFiltersActive) {
+  if (pilotOnlyCharacterIds.size > 0) {
     for (let i = 0; i < allRows.length; i++) {
-      allRows[i].classList.remove("filtered-out");
+      const row = allRows[i];
+      let shouldHide = false;
+      let anyMatch = false;
+      for (const cid of pilotOnlyCharacterIds) {
+        if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) { anyMatch = true; break; }
+      }
+      if (!anyMatch) { hiddenByPilot++; shouldHide = true; }
+      row.classList.toggle("filtered-out", shouldHide);
     }
   } else {
     for (let i = 0; i < allRows.length; i++) {
-      const row = allRows[i];
-      row.classList.remove("filtered-out");
-      let shouldHide = false;
-
-      if (!shouldHide && pilotOnlyCharacterIds.size > 0) {
-        let anyMatch = false;
-        for (const cid of pilotOnlyCharacterIds) {
-          if (row.querySelector(`a.pilot-link[data-character-id='${cid}']`)) { anyMatch = true; break; }
-        }
-        if (!anyMatch) { hiddenByPilot++; shouldHide = true; }
-      }
-
-      if (!shouldHide && maxAttackersLimit > 0) {
-        const kmRows = row.querySelectorAll(".killmail-row[data-attacker-count]");
-        for (let k = 0; k < kmRows.length; k++) {
-          const n = parseInt(kmRows[k].getAttribute("data-attacker-count") || "0", 10);
-          if (n > maxAttackersLimit) { hiddenByMaxAttackers++; shouldHide = true; break; }
-        }
-      }
-
-      if (shouldHide) row.classList.add("filtered-out");
+      allRows[i].classList.remove("filtered-out");
     }
   }
 
