@@ -476,10 +476,66 @@ safe_updates=()
 unsafe_updates=()
 skipped_updates=()
 
-check_one "nginx-exporter" "$NGINX_EXPORTER_IMAGE_REPO" "$NGINX_EXPORTER_IMAGE_TAG" "$NGINX_EXPORTER_IMAGE_DIGEST"
-check_one "prometheus" "$PROMETHEUS_IMAGE_REPO" "$PROMETHEUS_IMAGE_TAG" "$PROMETHEUS_IMAGE_DIGEST"
-check_one "grafana" "$GRAFANA_IMAGE_REPO" "$GRAFANA_IMAGE_TAG" "$GRAFANA_IMAGE_DIGEST"
-check_one "clamav-scan" "$CLAMAV_SCAN_IMAGE_REPO" "$CLAMAV_SCAN_IMAGE_TAG" "$CLAMAV_SCAN_IMAGE_DIGEST"
+SCANNED_DIGESTS_FILE="${SCANNED_DIGESTS_FILE:-./.scanned-digests}"
+
+load_scanned_digests() {
+  if [ -f "$SCANNED_DIGESTS_FILE" ]; then
+    # shellcheck disable=SC1090
+    . /dev/stdin <<<"$(tr -d '\r' < "$SCANNED_DIGESTS_FILE")"
+  fi
+}
+
+save_scanned_digest() {
+  local key="SCANNED_$1" value="$2"
+  mkdir -p "$(dirname "$SCANNED_DIGESTS_FILE")"
+  if grep -q "^${key}=" "$SCANNED_DIGESTS_FILE" 2>/dev/null; then
+    local tmp_file
+    tmp_file="$(mktemp)"
+    awk -v k="$key" -v v="$value" '
+      BEGIN { updated = 0 }
+      $0 ~ ("^" k "=") { print k "=" v; updated = 1; next }
+      { print }
+      END { if (!updated) print k "=" v }
+    ' "$SCANNED_DIGESTS_FILE" > "$tmp_file" && mv "$tmp_file" "$SCANNED_DIGESTS_FILE"
+  else
+    printf "%s=%s\n" "$key" "$value" >> "$SCANNED_DIGESTS_FILE"
+  fi
+}
+
+scanned_digest_unchanged() {
+  local key="SCANNED_$1" current="$2"
+  load_scanned_digests
+  local stored="${!key:-}"
+  [ -n "$stored" ] && [ "$stored" = "$current" ]
+}
+
+# Skip images whose digest hasn't changed since last scan
+SKIP_NGINX=n
+SKIP_PROMETHEUS=n
+SKIP_GRAFANA=n
+SKIP_CLAMAV=n
+
+if scanned_digest_unchanged "NGINX_EXPORTER_IMAGE_DIGEST" "$NGINX_EXPORTER_IMAGE_DIGEST"; then
+  echo "Skipping nginx-exporter: digest unchanged since last scan (${NGINX_EXPORTER_IMAGE_DIGEST})"
+  SKIP_NGINX=y
+fi
+if scanned_digest_unchanged "PROMETHEUS_IMAGE_DIGEST" "$PROMETHEUS_IMAGE_DIGEST"; then
+  echo "Skipping prometheus: digest unchanged since last scan (${PROMETHEUS_IMAGE_DIGEST})"
+  SKIP_PROMETHEUS=y
+fi
+if scanned_digest_unchanged "GRAFANA_IMAGE_DIGEST" "$GRAFANA_IMAGE_DIGEST"; then
+  echo "Skipping grafana: digest unchanged since last scan (${GRAFANA_IMAGE_DIGEST})"
+  SKIP_GRAFANA=y
+fi
+if scanned_digest_unchanged "CLAMAV_SCAN_IMAGE_DIGEST" "$CLAMAV_SCAN_IMAGE_DIGEST"; then
+  echo "Skipping clamav-scan: digest unchanged since last scan (${CLAMAV_SCAN_IMAGE_DIGEST})"
+  SKIP_CLAMAV=y
+fi
+
+[ "$SKIP_NGINX" = n ] && check_one "nginx-exporter" "$NGINX_EXPORTER_IMAGE_REPO" "$NGINX_EXPORTER_IMAGE_TAG" "$NGINX_EXPORTER_IMAGE_DIGEST"
+[ "$SKIP_PROMETHEUS" = n ] && check_one "prometheus" "$PROMETHEUS_IMAGE_REPO" "$PROMETHEUS_IMAGE_TAG" "$PROMETHEUS_IMAGE_DIGEST"
+[ "$SKIP_GRAFANA" = n ] && check_one "grafana" "$GRAFANA_IMAGE_REPO" "$GRAFANA_IMAGE_TAG" "$GRAFANA_IMAGE_DIGEST"
+[ "$SKIP_CLAMAV" = n ] && check_one "clamav-scan" "$CLAMAV_SCAN_IMAGE_REPO" "$CLAMAV_SCAN_IMAGE_TAG" "$CLAMAV_SCAN_IMAGE_DIGEST"
 
 if [ "${#unsafe_updates[@]}" -gt 0 ]; then
   echo
@@ -505,10 +561,22 @@ if [ "${#safe_updates[@]}" -gt 0 ]; then
   for item in "${safe_updates[@]}"; do
     IFS='|' read -r name digest <<< "$item"
     case "$name" in
-      nginx-exporter) update_env_var "NGINX_EXPORTER_IMAGE_DIGEST" "$digest" "$ENV_FILE" ;;
-      prometheus) update_env_var "PROMETHEUS_IMAGE_DIGEST" "$digest" "$ENV_FILE" ;;
-      grafana) update_env_var "GRAFANA_IMAGE_DIGEST" "$digest" "$ENV_FILE" ;;
-      clamav-scan) update_env_var "CLAMAV_SCAN_IMAGE_DIGEST" "$digest" "$SCANNERS_ENV_FILE" ;;
+      nginx-exporter)
+        update_env_var "NGINX_EXPORTER_IMAGE_DIGEST" "$digest" "$ENV_FILE"
+        save_scanned_digest "NGINX_EXPORTER_IMAGE_DIGEST" "$digest"
+        ;;
+      prometheus)
+        update_env_var "PROMETHEUS_IMAGE_DIGEST" "$digest" "$ENV_FILE"
+        save_scanned_digest "PROMETHEUS_IMAGE_DIGEST" "$digest"
+        ;;
+      grafana)
+        update_env_var "GRAFANA_IMAGE_DIGEST" "$digest" "$ENV_FILE"
+        save_scanned_digest "GRAFANA_IMAGE_DIGEST" "$digest"
+        ;;
+      clamav-scan)
+        update_env_var "CLAMAV_SCAN_IMAGE_DIGEST" "$digest" "$SCANNERS_ENV_FILE"
+        save_scanned_digest "CLAMAV_SCAN_IMAGE_DIGEST" "$digest"
+        ;;
     esac
   done
 
@@ -523,4 +591,8 @@ if [ "${#safe_updates[@]}" -gt 0 ]; then
 fi
 
 echo "No new third-party image digests were found."
+save_scanned_digest "NGINX_EXPORTER_IMAGE_DIGEST" "$NGINX_EXPORTER_IMAGE_DIGEST"
+save_scanned_digest "PROMETHEUS_IMAGE_DIGEST" "$PROMETHEUS_IMAGE_DIGEST"
+save_scanned_digest "GRAFANA_IMAGE_DIGEST" "$GRAFANA_IMAGE_DIGEST"
+save_scanned_digest "CLAMAV_SCAN_IMAGE_DIGEST" "$CLAMAV_SCAN_IMAGE_DIGEST"
 exit 0

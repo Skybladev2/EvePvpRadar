@@ -65,7 +65,7 @@ echo "BACKEND_IMAGE:  $BACKEND_IMAGE"
 
 echo "Checking third-party monitoring/security images for safe updates..."
 set +e
-ENV_FILE="$ENV_FILE" bash ./check-third-party-images.sh
+ENV_FILE=".env" bash ./check-third-party-images.sh
 CHECK_EXIT_CODE=$?
 set -e
 
@@ -73,7 +73,13 @@ case "$CHECK_EXIT_CODE" in
   0)
     ;;
   100)
-    echo "Safe third-party digest updates were applied. Re-run $0 to apply."
+    echo "Safe third-party digest updates applied. Regenerating stand env from updated .env..."
+    rm -f "$ENV_FILE"
+    ./generate-env-stands.sh
+    set -a
+    # shellcheck disable=SC1090
+    . /dev/stdin <<<"$(tr -d '\r' < "./$ENV_FILE")"
+    set +a
     ;;
   101)
     echo "Unsafe third-party update detected. Aborting build."
