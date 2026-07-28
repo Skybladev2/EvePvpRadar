@@ -17,6 +17,9 @@ esac
 echo "Bringing down existing stack (with volumes)..."
 docker compose down -v
 
+echo "Regenerating stand env files from .env..."
+rm -f .env.prod .env.test
+
 echo "Running build.sh $STAND..."
 TMPFILE=$(mktemp)
 trap "rm -f '$TMPFILE'" EXIT

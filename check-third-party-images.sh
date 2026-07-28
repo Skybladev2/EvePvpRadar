@@ -87,7 +87,7 @@ should_run_freshclam() {
     return 1
   fi
 
-  local max_age_seconds="${CLAMAV_FRESHCLAM_MAX_AGE_SECONDS:-3600}"
+  local max_age_seconds="${CLAMAV_FRESHCLAM_MAX_AGE_SECONDS:-86400}"
   local now_epoch last_epoch age_seconds
 
   now_epoch="$(date +%s)"
@@ -105,6 +105,7 @@ should_run_freshclam() {
   fi
 
   age_seconds=$((now_epoch - last_epoch))
+  echo "  - freshclam state: file=$CLAMAV_LAST_FRESHCLAM_RUN_FILE last_run=$(date -r "$last_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$last_epoch") age=${age_seconds}s max=${max_age_seconds}s"
   [ "$age_seconds" -ge "$max_age_seconds" ]
 }
 
@@ -295,6 +296,27 @@ sys.exit(0)
 PY
 }
 
+CLAMAV_FRESHCLAM_DONE=0
+
+run_freshclam_if_needed() {
+  if [ "$ENABLE_MALWARE_SCAN" != "1" ]; then
+    return
+  fi
+  if [ "$CLAMAV_FRESHCLAM_DONE" = "1" ]; then
+    return
+  fi
+  if ! should_run_freshclam; then
+    return
+  fi
+  echo "Updating ClamAV virus definitions..."
+  if docker run --rm "$CLAMAV_SCANNER_IMAGE" freshclam --stdout; then
+    mark_freshclam_attempt
+    CLAMAV_FRESHCLAM_DONE=1
+  else
+    echo "WARNING: ClamAV database update failed, proceeding with current definitions"
+  fi
+}
+
 scan_candidate_for_malware() {
   local image_ref="$1"
   local work_dir="" export_tar rootfs_dir container_id tmp_output=""
@@ -323,33 +345,18 @@ scan_candidate_for_malware() {
   #  1: malware found
   #  2: error
   local clamscan_rc=0
-  if should_run_freshclam; then
-    echo "  - starting tool: ClamAV (malware scan, with freshclam) on ${image_ref}"
-    # Even if freshclam fails (e.g. CDN rate limiting), throttle for the configured interval.
-    mark_freshclam_attempt
+  run_freshclam_if_needed
+  echo "  - scanning ${image_ref}"
 
-    clamscan_rc=0
-    docker run --rm \
-      -v "${rootfs_dir}:/scan:ro" \
-      "$CLAMAV_SCANNER_IMAGE" \
-      sh -c 'freshclam --stdout >/dev/null && clamscan -r --infected --no-summary /scan' >"$tmp_output" 2>&1 \
-      || clamscan_rc=$?
+  clamscan_rc=0
+  docker run --rm \
+    -v "${rootfs_dir}:/scan:ro" \
+    "$CLAMAV_SCANNER_IMAGE" \
+    sh -c 'clamscan -r --infected --no-summary /scan' >"$tmp_output" 2>&1 \
+    || clamscan_rc=$?
 
-    if [ "$clamscan_rc" -eq 0 ]; then
-      return 0
-    fi
-  else
-    echo "  - starting tool: ClamAV (malware scan; freshclam throttled) on ${image_ref}"
-    clamscan_rc=0
-    docker run --rm \
-      -v "${rootfs_dir}:/scan:ro" \
-      "$CLAMAV_SCANNER_IMAGE" \
-      sh -c 'clamscan -r --infected --no-summary /scan' >"$tmp_output" 2>&1 \
-      || clamscan_rc=$?
-
-    if [ "$clamscan_rc" -eq 0 ]; then
-      return 0
-    fi
+  if [ "$clamscan_rc" -eq 0 ]; then
+    return 0
   fi
 
   if [ "$clamscan_rc" -eq 1 ]; then

@@ -73,8 +73,7 @@ case "$CHECK_EXIT_CODE" in
   0)
     ;;
   100)
-    echo "Safe third-party digest updates were applied. Re-run build.sh."
-    exit 0
+    echo "Safe third-party digest updates were applied. Re-run $0 to apply."
     ;;
   101)
     echo "Unsafe third-party update detected. Aborting build."
