@@ -2458,7 +2458,18 @@ func getProximityRoutesBatch(fromSystemID int, targetSystemIDs []int, maxJumps i
 			route:    buildEveScoutRouteFromPath(bestPath),
 		}
 
-		if bestViaThera {
+		pathContainsThera := false
+		for _, sysID := range bestPath {
+			if sysID == TheraSystemID {
+				pathContainsThera = true
+				break
+			}
+		}
+
+		if bestViaThera || pathContainsThera {
+			if pathContainsThera && !bestViaThera {
+				result.viaThera = true
+			}
 			result.theraInfo = "Thera"
 			lookupMaxShipSize, isEOL := globalRouteFinder.GetTheraSignatureInfoForRoute(bestPath)
 			if lookupMaxShipSize != "" {
