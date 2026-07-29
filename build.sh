@@ -102,7 +102,7 @@ fi
 
 echo "Building images${NO_CACHE:+" with no cache"}..."
 # shellcheck disable=SC2086
-docker compose build $NO_CACHE frontend backend
+docker compose build $NO_CACHE --provenance=false --platform linux/amd64 frontend backend
 
 echo "Pushing images to container registry..."
 docker compose push frontend backend
