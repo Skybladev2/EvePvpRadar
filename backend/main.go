@@ -5283,8 +5283,25 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 
 	html.WriteString("</tr></thead><tbody>")
 
-	// Get all systems with recent kills to check route systems
+	// Get all systems with recent kills to check route systems, then filter out
+	// highsec station kills not visible to this faction (prevents leaking their existence
+	// to unauthenticated users or wrong factions via the route ⚠ icon).
 	systemsWithKills := getSystemsWithPrecalculatedKills()
+	if factionShortName == "" {
+		for sysID, kills := range systemsWithKills {
+			keep := kills[:0]
+			for _, k := range kills {
+				if k.HighsecVisibleFor == "" {
+					keep = append(keep, k)
+				}
+			}
+			if len(keep) == 0 {
+				delete(systemsWithKills, sysID)
+			} else {
+				systemsWithKills[sysID] = keep
+			}
+		}
+	}
 
 	// Compute pilots that appear in multiple different systems (current result set).
 	// Used to highlight "repeat offenders" across systems.
