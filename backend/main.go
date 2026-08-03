@@ -2769,26 +2769,24 @@ func isValidKillmail(killmail *zkillboardcache.CachedKillmail) (bool, bool) {
 }
 
 // calculateDataForKillmail calculates and stores precalculated data for a valid killmail
-func calculateDataForKillmail(killmailID int, killmail *zkillboardcache.CachedKillmail) {
+// buildCachedKillmail converts a raw cached killmail into the fully processed form used by
+// precalculated data (position, nearest stargate/station, ship info). Returns ok=false when the
+// killmail cannot be processed (invalid, unknown system, missing position).
+func buildCachedKillmail(killmail *zkillboardcache.CachedKillmail) (*CachedKillmail, bool, bool) {
 	valid, isStation := isValidKillmail(killmail)
 	if !valid {
-		system := getSystemById(killmail.SolarSystemID)
-		systemName := "unknown"
-		if system.SystemID != 0 {
-			systemName = system.SystemName
-		}
-		logging.Debugf("Killmail %d in system %s (%d) is invalid for precalculation, skipping", killmailID, systemName, killmail.SolarSystemID)
-		return
+		logging.Debugf("Killmail %d in system %d is invalid for precalculation, skipping", killmail.KillmailID, killmail.SolarSystemID)
+		return nil, false, false
 	}
 
 	// Get system info
 	system := getSystemById(killmail.SolarSystemID)
 	if system.SystemID == 0 {
-		logging.Debugf("Warning: System %d not found for killmail %d", killmail.SolarSystemID, killmailID)
-		return
+		logging.Debugf("Warning: System %d not found for killmail %d", killmail.SolarSystemID, killmail.KillmailID)
+		return nil, false, false
 	}
 
-	logging.Debugf("Precalculating data for valid killmail %d in system %s (%d) (station=%v)", killmailID, system.SystemName, killmail.SolarSystemID, isStation)
+	logging.Debugf("Precalculating data for valid killmail %d in system %s (%d) (station=%v)", killmail.KillmailID, system.SystemName, killmail.SolarSystemID, isStation)
 
 	// Get kill position and distance
 	attackers := make([]ESIAttacker, len(killmail.Attackers))
@@ -2846,14 +2844,14 @@ func calculateDataForKillmail(killmailID int, killmail *zkillboardcache.CachedKi
 	var minStationDist *float64
 	if killmail.SolarSystemID == TheraSystemID {
 		if killmail.Victim.Position == nil {
-			log.Printf("Error: Thera killmail %d has no position data", killmailID)
-			return
+			log.Printf("Error: Thera killmail %d has no position data", killmail.KillmailID)
+			return nil, false, false
 		}
 		killPos = [3]float64{killmail.Victim.Position.X, killmail.Victim.Position.Y, killmail.Victim.Position.Z}
 	} else if isStation {
 		// Station kill: use victim position directly, find nearest station
 		if killmail.Victim.Position == nil {
-			return
+			return nil, false, false
 		}
 		killPos = [3]float64{killmail.Victim.Position.X, killmail.Victim.Position.Y, killmail.Victim.Position.Z}
 		dist, _, _ := findNearestStationDistance(killmail.SolarSystemID, killPos)
@@ -2867,8 +2865,8 @@ func calculateDataForKillmail(killmailID int, killmail *zkillboardcache.CachedKi
 			esiKillmail,
 		)
 		if err != nil {
-			log.Printf("Error calculating position for killmail %d: %v", killmailID, err)
-			return
+			log.Printf("Error calculating position for killmail %d: %v", killmail.KillmailID, err)
+			return nil, false, false
 		}
 		killPos = pos
 		minDistance = &dist
@@ -2912,7 +2910,7 @@ func calculateDataForKillmail(killmailID int, killmail *zkillboardcache.CachedKi
 		},
 	}
 
-	cachedKillmail := CachedKillmail{
+	cachedKillmail := &CachedKillmail{
 		KillmailID:            killmail.KillmailID,
 		KillmailTime:          killmail.KillmailTime,
 		Victim:                victim,
@@ -2927,45 +2925,51 @@ func calculateDataForKillmail(killmailID int, killmail *zkillboardcache.CachedKi
 
 	isHighsec := !isLowsecOrNullsecSystem(killmail.SolarSystemID) && !isPochvenSystem(killmail.SolarSystemID)
 
+	return cachedKillmail, isHighsec, true
+}
+
+// applyKillmailToPrecalculatedData stores a fully processed killmail into data (systemsWithKills /
+// highsecStationKills) and precalculates near-trade-hubs entries for its system. Mutates data in
+// place; the caller owns double-buffering/thread-safety.
+func applyKillmailToPrecalculatedData(data *PrecalculatedData, killmailID int, killmail *zkillboardcache.CachedKillmail) {
+	cachedKillmail, isHighsec, ok := buildCachedKillmail(killmail)
+	if !ok {
+		return
+	}
+
+	data.calculatedKillmails[killmailID] = time.Now()
+
 	if isHighsec {
 		// Highsec station kills: store separately, no trade hub precalc
-		precalculatedData.Write(func(data *PrecalculatedData) {
-			data.calculatedKillmails[killmailID] = time.Now()
-			if data.highsecStationKills == nil {
-				data.highsecStationKills = make(map[int][]CachedKillmail)
-			}
-			data.highsecStationKills[killmail.SolarSystemID] = append(data.highsecStationKills[killmail.SolarSystemID], cachedKillmail)
-		})
-	} else {
-		// Store in precalculated data - store both the timestamp and the fully processed killmail
-		precalculatedData.Write(func(data *PrecalculatedData) {
-			data.calculatedKillmails[killmailID] = time.Now()
-			if data.systemsWithKills == nil {
-				data.systemsWithKills = make(map[int][]CachedKillmail)
-			}
-			existingKills := len(data.systemsWithKills[killmail.SolarSystemID])
-			data.systemsWithKills[killmail.SolarSystemID] = append(data.systemsWithKills[killmail.SolarSystemID], cachedKillmail)
-			logging.Debugf("Writing killmail %d to precalculatedData: system %s (%d) now has %d kill(s) (was %d)", killmailID, system.SystemName, killmail.SolarSystemID, len(data.systemsWithKills[killmail.SolarSystemID]), existingKills)
-			logging.Debugf("Total systems in precalculatedData.systemsWithKills: %d", len(data.systemsWithKills))
-		})
-
-		// Verify the write by reading back immediately
-		readFn := precalculatedData.Read()
-		verifyData := readFn()
-		if kills, exists := verifyData.systemsWithKills[killmail.SolarSystemID]; exists {
-			logging.Debugf("Verified: System %s (%d) has %d kill(s) in precalculatedData after write", system.SystemName, killmail.SolarSystemID, len(kills))
-		} else {
-			logging.Debugf("ERROR: System %s (%d) NOT FOUND in precalculatedData after write! Total systems: %d", system.SystemName, killmail.SolarSystemID, len(verifyData.systemsWithKills))
+		if data.highsecStationKills == nil {
+			data.highsecStationKills = make(map[int][]CachedKillmail)
 		}
-
-		// Precalculate Near trade hubs mode data for this system (trade hub, distance, route)
-		precalculateNearTradeHubsModeForSystem(killmail.SolarSystemID)
+		data.highsecStationKills[killmail.SolarSystemID] = append(data.highsecStationKills[killmail.SolarSystemID], *cachedKillmail)
+		return
 	}
+
+	// Store in precalculated data - store both the timestamp and the fully processed killmail
+	if data.systemsWithKills == nil {
+		data.systemsWithKills = make(map[int][]CachedKillmail)
+	}
+	data.systemsWithKills[killmail.SolarSystemID] = append(data.systemsWithKills[killmail.SolarSystemID], *cachedKillmail)
+
+	// Precalculate Near trade hubs mode data for this system (trade hub, distance, route)
+	precalculateNearTradeHubsModeForSystem(data, killmail.SolarSystemID)
+}
+
+// calculateDataForKillmail processes a single new killmail from the stream into precalculated data.
+// Single-kill incremental path: one double-buffer Write (copy-modify-swap) per killmail, which is
+// fine for the stream. Full recalculations must use rebuildPrecalculatedData instead (batching).
+func calculateDataForKillmail(killmailID int, killmail *zkillboardcache.CachedKillmail) {
+	precalculatedData.Write(func(data *PrecalculatedData) {
+		applyKillmailToPrecalculatedData(data, killmailID, killmail)
+	})
 
 	// Invalidate after both systemsWithKills and nearTradeHubsMode are updated.
 	invalidateIndexHTMLCache()
 
-	logging.Debugf("Precalculated data for killmail %d in system %s (%d)", killmailID, system.SystemName, killmail.SolarSystemID)
+	logging.Debugf("Precalculated data for killmail %d in system %s (%d)", killmailID, getSystemById(killmail.SolarSystemID).SystemName, killmail.SolarSystemID)
 }
 
 // isTheraStationLocation returns true if locationID is one of Thera's station/structure IDs
@@ -3245,17 +3249,16 @@ func getTheraCampKills() []CachedKillmail {
 	return campKills
 }
 
-// precalculateNearTradeHubsModeForSystem calculates and stores near trade hubs mode data (trade hub, distance, route) for a system
-func precalculateNearTradeHubsModeForSystem(targetSystemID int) {
+// precalculateNearTradeHubsModeForSystem calculates and stores near trade hubs mode data (trade hub, distance, route) for a system.
+// Writes directly into the provided PrecalculatedData (the caller owns double-buffering/thread-safety).
+func precalculateNearTradeHubsModeForSystem(data *PrecalculatedData, targetSystemID int) {
 	targetSystem := getSystemById(targetSystemID)
 	if targetSystem.SystemID == 0 {
 		return
 	}
 
-	// Get kills for this system from precalculated data
+	// Get kills for this system from the (in-progress) precalculated data
 	var kills []CachedKillmail
-	readFn := precalculatedData.Read()
-	data := readFn()
 	if data.systemsWithKills != nil {
 		kills = data.systemsWithKills[targetSystemID]
 	}
@@ -3344,86 +3347,88 @@ func precalculateNearTradeHubsModeForSystem(targetSystemID int) {
 	}
 
 	if len(kills) > 0 && (closestPrimary != nil || len(specialCandidates) > 0) {
-		precalculatedData.Write(func(data *PrecalculatedData) {
-			if data.nearTradeHubsMode == nil {
-				data.nearTradeHubsMode = make(map[string]PrecalculatedSystemData)
-			}
+		if data.nearTradeHubsMode == nil {
+			data.nearTradeHubsMode = make(map[string]PrecalculatedSystemData)
+		}
 
-			sortedKills := make([]CachedKillmail, len(kills))
-			copy(sortedKills, kills)
-			sort.Slice(sortedKills, func(i, j int) bool {
-				timeI, _ := time.Parse("2006-01-02T15:04:05Z", sortedKills[i].KillmailTime)
-				timeJ, _ := time.Parse("2006-01-02T15:04:05Z", sortedKills[j].KillmailTime)
-				return timeI.After(timeJ)
-			})
-
-			now := time.Now()
-
-			if closestPrimary != nil {
-				key := fmt.Sprintf("%d|%s", targetSystemID, closestPrimary.hub.Name)
-				data.nearTradeHubsMode[key] = PrecalculatedSystemData{
-					SystemID:    targetSystem.SystemID,
-					Name:        targetSystem.SystemName,
-					Security:    targetSystem.Security,
-					Dist:        closestPrimary.distance,
-					ViaThera:    closestPrimary.viaThera,
-					TheraInfo:   closestPrimary.theraInfo,
-					MaxShipSize: closestPrimary.maxShipSize,
-					Route:       closestPrimary.route,
-					RecentKills: sortedKills,
-					TradeHub:    closestPrimary.hub.Name,
-					Weight:      0,
-					LastUpdated: now,
-				}
-			}
-
-			for _, sc := range specialCandidates {
-				key := fmt.Sprintf("%d|%s", targetSystemID, sc.hub.Name)
-				data.nearTradeHubsMode[key] = PrecalculatedSystemData{
-					SystemID:    targetSystem.SystemID,
-					Name:        targetSystem.SystemName,
-					Security:    targetSystem.Security,
-					Dist:        sc.distance,
-					ViaThera:    sc.viaThera,
-					TheraDist:   sc.distance,
-					TheraInfo:   sc.theraInfo,
-					MaxShipSize: sc.maxShipSize,
-					Route:       sc.route,
-					RecentKills: sortedKills,
-					TradeHub:    sc.hub.Name,
-					Weight:      0,
-					LastUpdated: now,
-				}
-			}
+		sortedKills := make([]CachedKillmail, len(kills))
+		copy(sortedKills, kills)
+		sort.Slice(sortedKills, func(i, j int) bool {
+			timeI, _ := time.Parse("2006-01-02T15:04:05Z", sortedKills[i].KillmailTime)
+			timeJ, _ := time.Parse("2006-01-02T15:04:05Z", sortedKills[j].KillmailTime)
+			return timeI.After(timeJ)
 		})
-		invalidateIndexHTMLCache()
+
+		now := time.Now()
+
+		if closestPrimary != nil {
+			key := fmt.Sprintf("%d|%s", targetSystemID, closestPrimary.hub.Name)
+			data.nearTradeHubsMode[key] = PrecalculatedSystemData{
+				SystemID:    targetSystem.SystemID,
+				Name:        targetSystem.SystemName,
+				Security:    targetSystem.Security,
+				Dist:        closestPrimary.distance,
+				ViaThera:    closestPrimary.viaThera,
+				TheraInfo:   closestPrimary.theraInfo,
+				MaxShipSize: closestPrimary.maxShipSize,
+				Route:       closestPrimary.route,
+				RecentKills: sortedKills,
+				TradeHub:    closestPrimary.hub.Name,
+				Weight:      0,
+				LastUpdated: now,
+			}
+		}
+
+		for _, sc := range specialCandidates {
+			key := fmt.Sprintf("%d|%s", targetSystemID, sc.hub.Name)
+			data.nearTradeHubsMode[key] = PrecalculatedSystemData{
+				SystemID:    targetSystem.SystemID,
+				Name:        targetSystem.SystemName,
+				Security:    targetSystem.Security,
+				Dist:        sc.distance,
+				ViaThera:    sc.viaThera,
+				TheraDist:   sc.distance,
+				TheraInfo:   sc.theraInfo,
+				MaxShipSize: sc.maxShipSize,
+				Route:       sc.route,
+				RecentKills: sortedKills,
+				TradeHub:    sc.hub.Name,
+				Weight:      0,
+				LastUpdated: now,
+			}
+		}
 	}
 }
 
 // recalculateFromKills clears precalculated data and recalculates routes for the given killmails.
 // Used by EnsureRecalculated (and after-backfill callback) with a snapshot so backfill can resume while recalc runs.
+// rebuildPrecalculatedData rebuilds all precalculated data from scratch for the given killmails in a
+// single pass and atomically swaps it in. This is the O(N) alternative to N per-kill Write calls,
+// each of which deep-copies the whole (growing) collection (O(N²) total). Callers serialize with the
+// incremental stream via recalcMu so a rebuild cannot race a Write.
+func rebuildPrecalculatedData(kills []zkillboardcache.CachedKillmail) {
+	data := &PrecalculatedData{
+		normalMode:          make(map[int][]PrecalculatedSystemData),
+		nearTradeHubsMode:   make(map[string]PrecalculatedSystemData),
+		calculatedKillmails: make(map[int]time.Time),
+		systemsWithKills:    make(map[int][]CachedKillmail),
+		highsecStationKills: make(map[int][]CachedKillmail),
+	}
+	for i := range kills {
+		applyKillmailToPrecalculatedData(data, kills[i].KillmailID, &kills[i])
+	}
+	precalculatedData.WriteSwap(data)
+	invalidateIndexHTMLCache()
+}
+
 func recalculateFromKills(kills []zkillboardcache.CachedKillmail) {
 	log.Printf("Recalculating all routes from cache: %d killmails", len(kills))
 
-	precalculatedData.Write(func(data *PrecalculatedData) {
-		data.systemsWithKills = make(map[int][]CachedKillmail)
-		data.normalMode = make(map[int][]PrecalculatedSystemData)
-		data.nearTradeHubsMode = make(map[string]PrecalculatedSystemData)
-		data.highsecStationKills = make(map[int][]CachedKillmail)
-		data.calculatedKillmails = make(map[int]time.Time)
-	})
-
-	recalculatedCount := 0
-	for i := range kills {
-		kill := &kills[i]
-		calculateDataForKillmail(kill.KillmailID, kill)
-		recalculatedCount++
-	}
+	rebuildPrecalculatedData(kills)
 
 	readFn := precalculatedData.Read()
 	data := readFn()
-	log.Printf("Recalculate from cache done: %d killmails, %d systems with kills", recalculatedCount, len(data.systemsWithKills))
-	invalidateIndexHTMLCache()
+	log.Printf("Recalculate from cache done: %d killmails, %d systems with kills", len(kills), len(data.systemsWithKills))
 }
 
 // EnsureRecalculated recalculates routes from current cache so precalculated data is up to date.
@@ -3472,29 +3477,13 @@ func recalculateForTheraUpdate() {
 	recalcInProgress = true
 	recalcMu.Unlock()
 
-	// Clear precalculated data before recalculating (same as recalculateFromKills) to avoid duplicates and stale data
-	precalculatedData.Write(func(data *PrecalculatedData) {
-		beforeClear := len(data.systemsWithKills)
-		data.systemsWithKills = make(map[int][]CachedKillmail)
-		data.normalMode = make(map[int][]PrecalculatedSystemData)
-		data.nearTradeHubsMode = make(map[string]PrecalculatedSystemData)
-		data.highsecStationKills = make(map[int][]CachedKillmail)
-		data.calculatedKillmails = make(map[int]time.Time)
-		logging.Debugf("recalculateForTheraUpdate: Clearing precalculated data (had %d systems with kills)", beforeClear)
-		logging.Debugf("recalculateForTheraUpdate: Cleared precalculated data, will recalculate %d killmails", len(kills))
-	})
-
-	// Recalculate each killmail (this will rebuild systemsWithKills, nearTradeHubsMode, and highsecStationKills with updated Thera routes)
-	for i := range kills {
-		kill := &kills[i]
-		calculateDataForKillmail(kill.KillmailID, kill)
-	}
+	// Rebuild everything in one pass (replaces the clear + per-kill Write loop; applies updated Thera routes)
+	rebuildPrecalculatedData(kills)
 
 	verifyReadFn := precalculatedData.Read()
 	verifyData := verifyReadFn()
 	log.Printf("Recalculate from Thera update done: %d killmails, %d systems with kills", len(kills), len(verifyData.systemsWithKills))
 	logging.Debugf("recalculateForTheraUpdate: Completed - %d systems with kills after recalculation", len(verifyData.systemsWithKills))
-	invalidateIndexHTMLCache()
 
 	recalcMu.Lock()
 	recalcInProgress = false

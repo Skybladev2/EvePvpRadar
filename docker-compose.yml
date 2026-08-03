@@ -57,7 +57,11 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Hard container cap (VM has 2GB total; grafana/prometheus/nginx take ~350MB)
+    mem_limit: 1536m
     environment:
+      # Soft GC target so the heap is reaped well below the container cap; batches to 1GB max
+      - GOMEMLIMIT=1024MiB
       - PORT=8080
       - METRICS_PORT=${METRICS_PORT}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

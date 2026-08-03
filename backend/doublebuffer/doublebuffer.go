@@ -60,6 +60,25 @@ func (db *DoubleBuffer[T]) Read() func() *T {
 	}
 }
 
+// WriteSwap installs newValue as the current instance without copying from the old one.
+// Only safe for bulk rebuild paths where the caller (under its own lock, e.g. recalcMu)
+// reconstructs the whole collection and no other writer is active.
+func (db *DoubleBuffer[T]) WriteSwap(newValue *T) {
+	atomic.AddInt64(&db.activeWriters, 1)
+	<-db.writerSem
+
+	defer func() {
+		atomic.AddInt64(&db.activeWriters, -1)
+		db.writerSem <- struct{}{} // Release semaphore for next writer
+	}()
+
+	// Replace the non-current instance and swap; the other buffer becomes a stale
+	// copy that the next Write overwrites via its normal copy-from-current.
+	writeIdx := 1 - atomic.LoadInt32(&db.currentIdx)
+	db.instances[writeIdx] = newValue
+	atomic.StoreInt32(&db.currentIdx, int32(writeIdx))
+}
+
 // Write queues a write operation and provides exclusive access to a copy for modification.
 // The modifyFn receives a copy of the current collection to modify.
 // After modification, the instances are swapped atomically.
