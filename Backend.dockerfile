@@ -1,6 +1,6 @@
 # Build stage
-# Base image tag: golang:1.26.5-alpine3.23
-FROM golang:1.26.5-alpine3.23@sha256:622e56dbc11a8cfe87cafa2331e9a201877271cbff918af53d3be315f3da88cc AS builder
+# Base image tag: golang:1.26.7-alpine3.23
+FROM golang:1.26.7-alpine3.23@sha256:9002107029a2333e1cf00327799187cd0f31070e97efebdbd3fc929a257e2f63 AS builder
 
 WORKDIR /app
 
