@@ -1520,3 +1520,13 @@
         .toast.toast-info {
             border-left-color: #6ab7ff;
         }
+        /* Mobile sticky-hover dismiss: on touch devices a tap leaves the element in
+           a sticky :hover state, so the CSS :hover tooltip never goes away. This class
+           (toggled by app.js on touch) overrides every tooltip rule above. */
+        [data-tooltip].tooltip-suppressed::after,
+        [data-tooltip].tooltip-suppressed::before {
+            content: none !important;
+            display: none !important;
+            opacity: 0 !important;
+            visibility: hidden !important;
+        }

@@ -66,16 +66,48 @@ let initialLoadDone = false;
 // Store current location to restore when switching back to proximity mode
 let currentLocationData = null; // { systemID, systemName }
 
+// Primary input devices without hover (phones/tablets) leave a sticky :hover state
+// after a tap, which keeps a CSS-only tooltip visible. Those devices get a class-based
+// suppression instead of the attribute-stash used on desktops.
+const touchPrimaryInput = window.matchMedia && window.matchMedia("(hover: none)").matches;
+
+// Element whose CSS tooltip is currently pinned open by a mobile sticky :hover tap.
+// The toggle logic uses this so the first tap can leave the tooltip visible (so it
+// can be read) and a second tap on the same element, or a tap elsewhere, dismisses it.
+let stickyShownTooltipEl = null;
+
+// End the pinned tooltip session (sticky :hover), letting the tooltip show again later.
+function clearShownTooltip() {
+  if (!stickyShownTooltipEl) return;
+  stickyShownTooltipEl.classList.remove("tooltip-suppressed");
+  delete stickyShownTooltipEl.dataset.tooltipShown;
+  stickyShownTooltipEl = null;
+}
+
+// Dismiss a stale pinned tooltip as soon as the user scrolls away.
+if (touchPrimaryInput) {
+  document.addEventListener("scroll", clearShownTooltip, { passive: true });
+}
+
 // Suppress CSS [data-tooltip] tooltips in a container (mobile sticky hover fix).
-// Temporarily removes the data-tooltip attribute so the :hover pseudo-element disappears.
-function hideTooltipsIn(container) {
+// On desktop the data-tooltip attribute is temporarily removed so the :hover
+// pseudo-element disappears. On touch devices the sticky :hover persists after a tap,
+// so instead a class is added that overrides the tooltip via CSS.
+// `exempt` (optional) is the element being interacted with; its tooltip is left to
+// the click-toggle logic in bindEventHandlers().
+function hideTooltipsIn(container, exempt) {
   if (!container) return;
   container.querySelectorAll('[data-tooltip]').forEach(el => {
-    const saved = el.getAttribute('data-tooltip');
-    el.removeAttribute('data-tooltip');
-    setTimeout(() => {
-      if (saved) el.setAttribute('data-tooltip', saved);
-    }, 150);
+    if (exempt && exempt.closest && exempt.closest('[data-tooltip]') === el) return;
+    if (touchPrimaryInput) {
+      el.classList.add("tooltip-suppressed");
+    } else {
+      const saved = el.getAttribute('data-tooltip');
+      el.removeAttribute('data-tooltip');
+      setTimeout(() => {
+        if (saved) el.setAttribute('data-tooltip', saved);
+      }, 150);
+    }
   });
 }
 
@@ -278,6 +310,13 @@ function bindEventHandlers() {
 
   // Handle distance cell clicks to show/hide routes (using event delegation)
   document.addEventListener("click", function(e) {
+    // Dismiss any tooltip pinned open by an earlier mobile tap unless the user is
+    // tapping that same element again (so the click below can toggle it off).
+    if (touchPrimaryInput && stickyShownTooltipEl &&
+        !(e.target && e.target.closest && e.target.closest('[data-tooltip]') === stickyShownTooltipEl)) {
+      clearShownTooltip();
+    }
+
     // Check if the clicked element or its parent is the distance-value
     let distanceValue = null;
     if (e.target && e.target.classList.contains("distance-value")) {
@@ -293,7 +332,7 @@ function bindEventHandlers() {
         if (routeContainer) {
           routeContainer.classList.toggle("expanded");
         }
-        hideTooltipsIn(cell);
+        hideTooltipsIn(cell, e.target);
       }
     }
 
@@ -389,9 +428,24 @@ function bindEventHandlers() {
       }
     }
 
-    // Hide tooltip on any [data-tooltip] element click (mobile sticky hover fix)
-    if (e.target && e.target.hasAttribute && e.target.hasAttribute('data-tooltip')) {
-      hideTooltipsIn(e.target);
+    // Mobile sticky hover fix: a tap pins the CSS :hover tooltip open. Toggle it —
+    // the first tap leaves the tooltip visible so it can be read, a second tap on the
+    // same element dismisses it (a tap elsewhere clears it via clearShownTooltip).
+    const tooltipEl = e.target && e.target.closest && e.target.closest('[data-tooltip]');
+    if (tooltipEl) {
+      if (touchPrimaryInput) {
+        if (stickyShownTooltipEl === tooltipEl) {
+          tooltipEl.classList.add("tooltip-suppressed");
+          stickyShownTooltipEl = null;
+          delete tooltipEl.dataset.tooltipShown;
+        } else {
+          stickyShownTooltipEl = tooltipEl;
+          tooltipEl.dataset.tooltipShown = "1";
+          tooltipEl.classList.remove("tooltip-suppressed");
+        }
+      } else {
+        hideTooltipsIn(tooltipEl);
+      }
     }
   });
 
