@@ -81,6 +81,8 @@ CLAMAV_REFRESH_DB="${CLAMAV_REFRESH_DB//$'\r'/}"
 CLAMAV_FRESHCLAM_MAX_AGE_SECONDS="${CLAMAV_FRESHCLAM_MAX_AGE_SECONDS//$'\r'/}"
 CLAMAV_STATE_DIR="${CLAMAV_STATE_DIR//$'\r'/}"
 CLAMAV_LAST_FRESHCLAM_RUN_FILE="${CLAMAV_LAST_FRESHCLAM_RUN_FILE//$'\r'/}"
+BUILD_SOCKS5_PROXY="${BUILD_SOCKS5_PROXY//$'\r'/}"
+CLAMAV_PROXY_IMAGE="localhost/clamav-proxy:local"
 
 should_run_freshclam() {
   if [ "$CLAMAV_REFRESH_DB" != "1" ]; then
@@ -296,6 +298,42 @@ sys.exit(0)
 PY
 }
 
+build_clamav_proxy_image() {
+  if [ -z "$BUILD_SOCKS5_PROXY" ]; then
+    CLAMAV_FRESHCLAM_IMAGE="$CLAMAV_SCANNER_IMAGE"
+    return
+  fi
+
+  local proxy_url="$BUILD_SOCKS5_PROXY"
+  for _prefix in "socks5h://" "socks5://" "socks://"; do
+    if [[ "$proxy_url" == "$_prefix"* ]]; then
+      proxy_url="${proxy_url#"$_prefix"}"
+      break
+    fi
+  done
+
+  local proxy_host="${proxy_url%%:*}"
+  local proxy_port="${proxy_url##*:}"
+  if [ -z "$proxy_host" ] || [ -z "$proxy_port" ] || [ "$proxy_host" = "$proxy_url" ]; then
+    echo "WARNING: could not parse BUILD_SOCKS5_PROXY=${BUILD_SOCKS5_PROXY}; running freshclam without proxy"
+    CLAMAV_FRESHCLAM_IMAGE="$CLAMAV_SCANNER_IMAGE"
+    return
+  fi
+
+  echo "Building ClamAV proxy image (SOCKS5 ${proxy_host}:${proxy_port})..."
+  if docker build \
+    -f Dockerfile.clamav-proxy \
+    --build-arg CLAMAV_IMAGE="$CLAMAV_SCANNER_IMAGE" \
+    --build-arg SOCKS5_HOST="$proxy_host" \
+    --build-arg SOCKS5_PORT="$proxy_port" \
+    -t "$CLAMAV_PROXY_IMAGE" .; then
+    CLAMAV_FRESHCLAM_IMAGE="$CLAMAV_PROXY_IMAGE"
+  else
+    echo "WARNING: failed to build ClamAV proxy image; running freshclam without proxy"
+    CLAMAV_FRESHCLAM_IMAGE="$CLAMAV_SCANNER_IMAGE"
+  fi
+}
+
 CLAMAV_FRESHCLAM_DONE=0
 
 run_freshclam_if_needed() {
@@ -308,8 +346,9 @@ run_freshclam_if_needed() {
   if ! should_run_freshclam; then
     return
   fi
+  build_clamav_proxy_image
   echo "Updating ClamAV virus definitions..."
-  if docker run --rm "$CLAMAV_SCANNER_IMAGE" freshclam --stdout; then
+  if docker run --rm "$CLAMAV_FRESHCLAM_IMAGE" freshclam --stdout; then
     mark_freshclam_attempt
     CLAMAV_FRESHCLAM_DONE=1
   else
