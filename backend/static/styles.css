@@ -273,29 +273,6 @@
         .route-warning-sign::after {
             font-weight: normal;
         }
-        /* Gatecamp warning tooltip: shown strictly to the left of the sign (CSS-only).
-           Multi-line text (see data-tooltip, which contains newlines) is rendered on
-           its own lines via white-space: pre-line, keeping it compact. */
-        .route-warning-sign[data-tooltip]:hover:after {
-            content: attr(data-tooltip);
-            position: absolute;
-            top: 50%;
-            left: auto;
-            right: 100%;
-            transform: translateY(-50%);
-            margin-top: 0;
-            margin-right: 0.3125rem;
-            background: #333;
-            color: #fff;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            line-height: 1.35;
-            white-space: pre-line;
-            text-align: left;
-            z-index: 1000;
-            pointer-events: none;
-        }
         .attackers-section {
             display: block;
             margin-top: 0.5em;
@@ -553,6 +530,18 @@
             #result .attackers-table td::before {
                 display: none;
                 content: none;
+            }
+            /* Gatecamp warning tooltip – mobile only: shown to the left of the sign
+               with word-wrapping so it fits the narrow stacked layout. */
+            .route-warning-sign[data-tooltip]:hover:after {
+                top: 50%;
+                left: auto;
+                right: 100%;
+                transform: translateY(-50%);
+                margin-top: 0;
+                margin-right: 0.3125rem;
+                white-space: pre-line;
+                text-align: left;
             }
         }
         @media (max-width: 400px) {
