@@ -5519,7 +5519,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 
 		// Add warning sign if route has kills
 		if routeHasKills {
-			html.WriteString("<span class='route-warning-sign' data-tooltip='The route contains gatecamps'>⚠</span> ")
+			html.WriteString("<span class='route-warning-sign' data-tooltip='The route\ncontains\ngatecamps'>⚠</span> ")
 		}
 
 		html.WriteString(strconv.Itoa(system.Dist))

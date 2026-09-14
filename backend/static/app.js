@@ -84,7 +84,7 @@ function clearShownTooltip() {
   stickyShownTooltipEl = null;
 }
 
-// Dismiss a stale pinned tooltip as soon as the user scrolls away.
+// Dismiss a stale pinned CSS tooltip as soon as the user scrolls away.
 if (touchPrimaryInput) {
   document.addEventListener("scroll", clearShownTooltip, { passive: true });
 }
