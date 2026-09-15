@@ -5551,6 +5551,9 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 		if !hasRedundantRouteSuffix {
 			if routeContainsThera && routeContainsZarzakh {
 			theraSuffix := " (Thera"
+			if theraEOL {
+				theraSuffix += ", EOL"
+			}
 			if system.MaxShipSize != "" {
 				theraSuffix += ", max " + template.HTMLEscapeString(system.MaxShipSize)
 				logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (Thera+Zarzakh)", system.MaxShipSize, system.Name)
@@ -5561,6 +5564,9 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 			html.WriteString(theraSuffix)
 		} else if routeContainsThera {
 			theraSuffix := " (Thera"
+			if theraEOL {
+				theraSuffix += ", EOL"
+			}
 			if system.MaxShipSize != "" {
 				theraSuffix += ", max " + template.HTMLEscapeString(system.MaxShipSize)
 				logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (Thera only)", system.MaxShipSize, system.Name)
