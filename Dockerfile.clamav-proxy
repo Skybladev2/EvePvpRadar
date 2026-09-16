@@ -18,11 +18,31 @@ RUN if command -v apk >/dev/null 2>&1; then \
 ARG SOCKS5_HOST=127.0.0.1
 ARG SOCKS5_PORT=1080
 
-RUN printf '#!/bin/sh\nexec proxychains4 -f /etc/proxychains4.conf "$@"\n' > /usr/local/bin/proxy-freshclam && \
-    chmod +x /usr/local/bin/proxy-freshclam && \
-    printf 'strict_chain\nproxy_dns\ntcp_read_time_out 15000\ntcp_connect_time_out 8000\n\n[ProxyList]\nsocks5 %s %s\n' \
+RUN printf 'strict_chain\nproxy_dns\ntcp_read_time_out 15000\ntcp_connect_time_out 8000\n\n[ProxyList]\nsocks5 %s %s\n' \
       "${SOCKS5_HOST}" "${SOCKS5_PORT}" > /etc/proxychains4.conf && \
     chmod 644 /etc/proxychains4.conf
+
+RUN cat > /usr/local/bin/proxy-freshclam <<'EOF'
+#!/bin/sh
+set -e
+# proxychains requires the first proxy to be a numeric IP when proxy_dns+strict_chain
+# is active, and Docker Desktop endpoints (host.docker.internal) are hostnames.
+# Resolve the proxy host to an IP and run against a patched copy of the config.
+PROXY_LINE=$(sed -n 's/^socks5[[:space:]]*//p' /etc/proxychains4.conf)
+PROXY_HOST=${PROXY_LINE%% *}
+PROXY_PORT=${PROXY_LINE##* }
+case "$PROXY_HOST" in
+  *[!0-9.]*)
+    PROXY_IP=$(getent hosts "$PROXY_HOST" | awk 'NR == 1 { print $1 }')
+    [ -z "$PROXY_IP" ] && PROXY_IP="127.0.0.1"
+    sed "s|^socks5[[:space:]].*|socks5 $PROXY_IP $PROXY_PORT|" /etc/proxychains4.conf > /tmp/proxychains4.conf
+    exec proxychains4 -f /tmp/proxychains4.conf "$@"
+    ;;
+esac
+exec proxychains4 -f /etc/proxychains4.conf "$@"
+EOF
+
+RUN chmod +x /usr/local/bin/proxy-freshclam
 
 USER clamav
 

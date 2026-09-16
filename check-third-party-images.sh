@@ -320,6 +320,14 @@ build_clamav_proxy_image() {
     return
   fi
 
+  # The host-side lookup uses this same env value from the macOS host, so it must
+  # stay 127.0.0.1. But proxychains runs inside the container, where 127.0.0.1 is
+  # the container itself; host.docker.internal is the Docker Desktop alias for the
+  # host loopback and resolves only inside containers.
+  if [ "$proxy_host" = "127.0.0.1" ] || [ "$proxy_host" = "localhost" ]; then
+    proxy_host="host.docker.internal"
+  fi
+
   echo "Building ClamAV proxy image (SOCKS5 ${proxy_host}:${proxy_port})..."
   if docker build \
     -f Dockerfile.clamav-proxy \
@@ -438,10 +446,10 @@ check_one() {
     gate_line="$(dockerhub_tag_update_gate "$repo" "$tag" "$current_digest" "$THIRD_PARTY_IMAGE_MIN_AGE_DAYS")" || {
       echo "WARNING: Docker Hub metadata lookup failed for ${name} (${repo}:${tag}); skipping this image for now"
       local remaining=()
-      for item in "${safe_updates[@]}"; do
+      for item in ${safe_updates[@]+"${safe_updates[@]}"}; do
         [[ "$item" != "${name}|"* ]] && remaining+=("$item")
       done
-      safe_updates=("${remaining[@]}")
+      safe_updates=(${remaining[@]+"${remaining[@]}"})
       skipped_updates+=("${name}|docker hub metadata lookup failed")
       return 0
     }
@@ -500,10 +508,10 @@ check_one() {
       *)
         echo "WARNING: unexpected gate status from Docker Hub helper for ${name}: ${gate_line}; skipping this image for now"
         local remaining=()
-        for item in "${safe_updates[@]}"; do
+        for item in ${safe_updates[@]+"${safe_updates[@]}"}; do
           [[ "$item" != "${name}|"* ]] && remaining+=("$item")
         done
-        safe_updates=("${remaining[@]}")
+        safe_updates=(${remaining[@]+"${remaining[@]}"})
         skipped_updates+=("${name}|unexpected docker hub gate status")
         return 0
         ;;
