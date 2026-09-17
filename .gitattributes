@@ -1,0 +1,12 @@
+# Normalize all text files to LF on commit and checkout.
+# Prevents CRLF line-ending conversions from breaking shell scripts,
+# Dockerfiles, and docker-compose.yml.
+* text=auto eol=lf
+
+# Keep generated/binary files untouched by line-ending normalization.
+*.ico binary
+*.jpeg binary
+*.jpg binary
+*.png binary
+*.woff binary
+*.woff2 binary
