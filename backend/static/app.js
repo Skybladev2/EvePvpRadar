@@ -1748,8 +1748,10 @@ function applySecurityFilters() {
     return;
   }
 
-  // Query rows once; filter/count in JS instead of repeated querySelectorAll.
-  const allRows = resultTable.querySelectorAll("tbody tr");
+  // Query system rows once; filter/count in JS instead of repeated querySelectorAll.
+  // Use :scope > tbody > tr so nested attacker-table rows inside the Notes cell are
+  // never treated as system rows (otherwise pilot filtering would hide other pilots).
+  const allRows = resultTable.querySelectorAll(":scope > tbody > tr");
   let hiddenByLowsec = 0;
   let hiddenByNullsec = 0;
   let hiddenByTradeHub = 0;
