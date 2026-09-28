@@ -27,12 +27,12 @@ func loadSystemsForTest() ([]System, error) {
 	// Try to load from SDE
 	systemsFile := filepath.Join("..", "sde", "mapSolarSystems.jsonl")
 	if _, err := os.Stat(systemsFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("systems file not found: %s", systemsFile)
+		return nil, fmt.Errorf("systems file not found: %s (run ./fetch-sde-testdata.sh from the repo root to download the SDE test data)", systemsFile)
 	}
 
 	stargatesFile := filepath.Join("..", "sde", "mapStargates.jsonl")
 	if _, err := os.Stat(stargatesFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("stargates file not found: %s", stargatesFile)
+		return nil, fmt.Errorf("stargates file not found: %s (run ./fetch-sde-testdata.sh from the repo root to download the SDE test data)", stargatesFile)
 	}
 
 	systems, err := loadSystemsFromSDEFiles(systemsFile, stargatesFile)
