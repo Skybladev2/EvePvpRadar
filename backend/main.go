@@ -5818,7 +5818,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 				// Thera in route: link system name to EVE Scout
 				isTheraInRoute := routeSystem.SystemID == TheraSystemID
 				if isTheraInRoute {
-					html.WriteString("<a href='https://www.eve-scout.com' target='_blank' rel='noopener noreferrer' class='route-system-link' title='EVE Scout – Thera connections'>")
+					html.WriteString("<a href='https://zkillboard.com/system/" + strconv.Itoa(TheraSystemID) + "/' target='_blank' rel='noopener noreferrer' class='route-system-link' title='zKillboard – Thera kills'>")
 					html.WriteString(template.HTMLEscapeString(routeSystem.SystemName))
 					html.WriteString("</a>")
 					if hasKills {
