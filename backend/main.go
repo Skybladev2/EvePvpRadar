@@ -369,9 +369,15 @@ func getMilitiaIconsEmbeddedStyle() template.HTML {
 // Site root unique visitor tracking (IP + User-Agent) for Prometheus/Grafana.
 // Counter increments by 1 immediately on each new unique visitor (first-time only).
 // Prometheus aggregates via increase(...[1m]) for per-minute bars.
+//
+// siteRootEverSeen is bounded: the key is a 64-char hex digest derived from fully attacker-controlled
+// input (X-Forwarded-For + User-Agent), so an unbounded map is a memory-exhaustion vector. When the cap
+// is reached the oldest-seen half is dropped; recent visitors stay tracked and the "new unique" counter
+// stays monotonic, it simply may count a returning visitor as new again after eviction.
 var (
 	siteRootVisitorsMu     sync.Mutex
 	siteRootEverSeen       = map[string]struct{}{} // visitor keys ever seen (first-time = increment counter)
+	siteRootEverSeenMax    = 200000                // ~cap*64B of digest keys plus map overhead
 	siteRootNewUniqueTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "evepvpsearch_site_root_new_unique_visitors_total",
 		Help: "Total new unique visitors (IP + User-Agent) to site root; use increase(...[1m]) for per-minute rate",
@@ -458,6 +464,18 @@ func recordSiteRootVisitor(ip, userAgent string) {
 		return
 	}
 	siteRootEverSeen[key] = struct{}{}
+	if len(siteRootEverSeen) > siteRootEverSeenMax {
+		// Drop half of the tracked keys. Map iteration order is intentionally random, so this
+		// sheds a pseudo-random sample rather than a biased prefix.
+		drop := len(siteRootEverSeen) / 2
+		for k := range siteRootEverSeen {
+			delete(siteRootEverSeen, k)
+			if drop--; drop == 0 {
+				break
+			}
+		}
+		logging.Debugf("siteRootEverSeen hit cap (%d); evicted down to %d", siteRootEverSeenMax, len(siteRootEverSeen))
+	}
 	siteRootNewUniqueTotal.Add(1)
 }
 
@@ -742,12 +760,20 @@ var (
 var allFactionShortNames = []string{"", "caldari", "gallente", "amarr", "minmatar", "guristas", "angels"}
 
 var (
-	readyTablesMu                sync.RWMutex
-	readyNearTradeHubsByFaction  map[string]string // keyed by MilitiaShortName ("" = non-militia)
-	readyTheraCampsHTML          string
-	readyTablesBuilding          bool
-	readyTablesDirty             bool
+	readyTablesMu               sync.RWMutex
+	readyNearTradeHubsByFaction map[string]string // keyed by MilitiaShortName ("" = non-militia)
+	readyTheraCampsHTML         string
+	readyTablesBuilding         bool
+	readyTablesDirty            bool
+	readyTablesLastRebuild      time.Time
 )
+
+// readyTablesMinInterval throttles how often the ready-table snapshot is rebuilt.
+// A rebuild walks all precalculated kills and renders every faction variant, so it is far too
+// expensive to run once per incoming killmail (or once per cache-missing request, which calls
+// invalidateIndexHTMLCache). Without this floor the rebuild loop spun continuously and was the
+// dominant source of allocation pressure on the 2GB host.
+const readyTablesMinInterval = 15 * time.Second
 
 // invalidateIndexHTMLCache now marks table HTML as dirty and schedules background rebuild.
 // We intentionally keep serving the previous ready HTML until the new snapshot is ready.
@@ -765,8 +791,31 @@ func invalidateIndexHTMLCache() {
 	}
 }
 
+// readyTablesWaitBeforeRebuild returns how long a rebuild should wait before starting, to honour
+// readyTablesMinInterval. Reads readyTablesLastRebuild under the lock so the throttle state is
+// always accessed consistently.
+func readyTablesWaitBeforeRebuild() time.Duration {
+	readyTablesMu.RLock()
+	last := readyTablesLastRebuild
+	readyTablesMu.RUnlock()
+	if last.IsZero() {
+		return 0 // never rebuilt yet, build immediately
+	}
+	if wait := readyTablesMinInterval - time.Since(last); wait > 0 {
+		return wait
+	}
+	return 0
+}
+
 func rebuildReadyTablesHTML() {
 	for {
+		// Throttle: coalesce bursts of invalidations into at most one rebuild per interval.
+		// Only one rebuild goroutine ever runs (guarded by readyTablesBuilding), so sleeping here
+		// is safe and cheap, and any data that arrived while we sleep is picked up by this rebuild.
+		if wait := readyTablesWaitBeforeRebuild(); wait > 0 {
+			time.Sleep(wait)
+		}
+
 		log.Printf("Ready tables: rebuild started")
 		// Build a fresh snapshot based on latest precalculated data.
 		result := getNearTradeHubsResult()
@@ -809,6 +858,7 @@ func rebuildReadyTablesHTML() {
 		readyNearTradeHubsByFaction = newByFaction
 		readyTheraCampsHTML = newTheraCamps
 		readyTablesDirty = false
+		readyTablesLastRebuild = time.Now()
 		readyTablesBuilding = rebuildAgain
 		readyTablesMu.Unlock()
 		log.Printf("Ready tables: rebuild completed (%d faction variants, thera_camps=%d bytes)", len(newByFaction), len(newTheraCamps))
@@ -932,16 +982,20 @@ type PrecalculatedData struct {
 	systemsWithKills map[int][]CachedKillmail
 	// Highsec station kills: systemID -> kills near stations in highsec (not in nearTradeHubsMode)
 	highsecStationKills map[int][]CachedKillmail
+	// lastPruneAt is the time of the most recent retention sweep, used to rate-limit pruning on the
+	// per-killmail stream path. Must be carried across copies so the rate limit survives WriteSwap.
+	lastPruneAt time.Time
 }
 
 // copyPrecalculatedData creates a deep copy of PrecalculatedData
 func copyPrecalculatedData(src *PrecalculatedData) *PrecalculatedData {
 	dst := &PrecalculatedData{
-		normalMode:           make(map[int][]PrecalculatedSystemData),
-		nearTradeHubsMode:    make(map[string]PrecalculatedSystemData),
-		calculatedKillmails:  make(map[int]time.Time),
-		systemsWithKills:     make(map[int][]CachedKillmail),
-		highsecStationKills:  make(map[int][]CachedKillmail),
+		normalMode:          make(map[int][]PrecalculatedSystemData),
+		nearTradeHubsMode:   make(map[string]PrecalculatedSystemData),
+		calculatedKillmails: make(map[int]time.Time),
+		systemsWithKills:    make(map[int][]CachedKillmail),
+		highsecStationKills: make(map[int][]CachedKillmail),
+		lastPruneAt:         src.lastPruneAt,
 	}
 
 	// Deep copy normalMode map
@@ -1378,7 +1432,47 @@ var (
 	characterResolveSem      = make(chan struct{}, 2) // low concurrency to avoid bursting (best practice: don't operate at the limit)
 	characterResolveDelay    = 180 * time.Millisecond // stagger requests to spread over time
 	characterNameNegativeTTL = 5 * time.Minute        // avoid hammering ESI for missing/unreachable names
+	// characterNameCacheMax bounds the cache. Entries already expire by TTL, but expiry alone never
+	// freed them: readers only checked time.Now().Before(e.expiry) and left expired keys in the map,
+	// so it grew for the process lifetime (one entry per distinct attacker ever seen). IDs are keyed
+	// by upstream ESI data, and the write path stores a 365-day TTL for bulk-loaded names, so the
+	// expiry sweep below is the only thing keeping this bounded.
+	characterNameCacheMax   = 50000
+	characterNameCachePrune = func() {
+		now := time.Now()
+		for k, e := range characterNameCache {
+			if now.After(e.expiry) {
+				delete(characterNameCache, k)
+			}
+		}
+	}
 )
+
+// evictNearestExpiry removes the n cache entries whose expiry is soonest. Used to keep
+// characterNameCache bounded: entries that expire first are the least valuable to retain, so long
+// TTLs (e.g. the 365-day entries written by the bulk name loader) survive preferentially.
+// Callers must hold characterNameCacheMu for writing.
+func evictNearestExpiry(cache map[int]characterNameCacheEntry, n int) {
+	if n <= 0 || len(cache) == 0 {
+		return
+	}
+	if n > len(cache) {
+		n = len(cache)
+	}
+	type kv struct {
+		id     int
+		expiry time.Time
+	}
+	entries := make([]kv, 0, len(cache))
+	for k, v := range cache {
+		entries = append(entries, kv{k, v.expiry})
+	}
+	// Sort ascending by expiry, so the n soonest-expiring entries form the prefix to drop.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].expiry.Before(entries[j].expiry) })
+	for i := 0; i < n; i++ {
+		delete(cache, entries[i].id)
+	}
+}
 
 // esiCharacterNameFailureMsg builds a user-facing tooltip when ESI did not return a pilot name.
 func esiCharacterNameFailureMsg(characterID int, _ string) string {
@@ -1533,6 +1627,14 @@ func resolveCharacterNames(ids []int) (map[int]string, map[int]string) {
 			entry.expiry = time.Now().Add(ttl)
 		}
 		characterNameCache[r.id] = entry
+		// Bound the map: drop expired entries, and if that is not enough shed entries with the
+		// nearest expiry first so the long-lived bulk names survive over short-lived lookups.
+		if len(characterNameCache) > characterNameCacheMax {
+			characterNameCachePrune()
+		}
+		if len(characterNameCache) > characterNameCacheMax {
+			evictNearestExpiry(characterNameCache, len(characterNameCache)-characterNameCacheMax)
+		}
 		characterNameCacheMu.Unlock()
 	}
 
@@ -2928,6 +3030,10 @@ func buildCachedKillmail(killmail *zkillboardcache.CachedKillmail) (*CachedKillm
 	return cachedKillmail, isHighsec, true
 }
 
+// precalculatedRetention is the window of killmails kept in PrecalculatedData. It matches the
+// window GetRecentKills() uses, so incremental state stays consistent with a full rebuild.
+const precalculatedRetention = time.Hour
+
 // applyKillmailToPrecalculatedData stores a fully processed killmail into data (systemsWithKills /
 // highsecStationKills) and precalculates near-trade-hubs entries for its system. Mutates data in
 // place; the caller owns double-buffering/thread-safety.
@@ -2936,6 +3042,13 @@ func applyKillmailToPrecalculatedData(data *PrecalculatedData, killmailID int, k
 	if !ok {
 		return
 	}
+
+	// Drop killmails that have aged out of the retention window. The incremental stream path calls
+	// this once per incoming killmail, and the per-system slices plus calculatedKillmails were only
+	// ever trimmed by a full rebuild, so between rebuilds they grew monotonically for the lifetime of
+	// the process. Every read path already filters to the last hour, so this drops data nothing uses.
+	cutoff := time.Now().Add(-precalculatedRetention)
+	prunePrecalculatedData(data, cutoff)
 
 	data.calculatedKillmails[killmailID] = time.Now()
 
@@ -2956,6 +3069,66 @@ func applyKillmailToPrecalculatedData(data *PrecalculatedData, killmailID int, k
 
 	// Precalculate Near trade hubs mode data for this system (trade hub, distance, route)
 	precalculateNearTradeHubsModeForSystem(data, killmail.SolarSystemID)
+}
+
+// precalculatedPruneInterval throttles pruning so the per-killmail stream path does not walk every
+// system slice on every single killmail. The window is 1h, so checking a few times a minute is well
+// within tolerance; the data is only read by HTML rendering, which is itself throttled.
+const precalculatedPruneInterval = 30 * time.Second
+
+// prunePrecalculatedData drops killmails older than cutoff from PrecalculatedData.
+// This runs on the per-killmail hot path, so it is rate-limited: a sweep only happens at most once
+// per precalculatedPruneInterval, which also bounds the O(n) copy below.
+// Mutates data in place; the caller owns double-buffering/thread-safety.
+func prunePrecalculatedData(data *PrecalculatedData, cutoff time.Time) {
+	// Rate limit per invocation site. Stored on the struct so it travels with the data; guarded by
+	// the caller's write lock.
+	now := time.Now()
+	if now.Sub(data.lastPruneAt) < precalculatedPruneInterval {
+		return
+	}
+	data.lastPruneAt = now
+
+	// Full filter rather than a prefix trim: the incremental stream appends in arrival order, but
+	// rebuildPrecalculatedData replays kills newest-first, so ordering is not guaranteed. The
+	// rate limit above keeps this O(n) sweep cheap.
+	pruneKillSliceMap := func(m map[int][]CachedKillmail) {
+		for sysID, kills := range m {
+			kept := kills[:0] // reuse backing array; entries past len are released below
+			for _, k := range kills {
+				t, err := time.Parse("2006-01-02T15:04:05Z", k.KillmailTime)
+				// Unparseable timestamps are kept rather than dropped, to avoid data loss if ESI
+				// ever changes the format; they simply age out of the read paths' time filters.
+				if err != nil || !t.Before(cutoff) {
+					kept = append(kept, k)
+				}
+			}
+			if len(kept) == 0 {
+				// Whole system aged out: drop the key so the map does not accumulate empty systems.
+				delete(m, sysID)
+				continue
+			}
+			if len(kept) == len(kills) {
+				continue // nothing stale
+			}
+			// Copy into a fresh slice so the dropped entries are not kept alive by the old array.
+			remaining := make([]CachedKillmail, len(kept))
+			copy(remaining, kept)
+			m[sysID] = remaining
+		}
+	}
+
+	if len(data.systemsWithKills) > 0 {
+		pruneKillSliceMap(data.systemsWithKills)
+	}
+	if len(data.highsecStationKills) > 0 {
+		pruneKillSliceMap(data.highsecStationKills)
+	}
+	for id, t := range data.calculatedKillmails {
+		if t.Before(cutoff) {
+			delete(data.calculatedKillmails, id)
+		}
+	}
 }
 
 // calculateDataForKillmail processes a single new killmail from the stream into precalculated data.
