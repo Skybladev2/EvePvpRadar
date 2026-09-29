@@ -10,6 +10,7 @@ A web application for finding PvP activity in EVE Online.
   * https://api.eve-scout.com
   * https://esi.evetech.net
   * https://login.eveonline.com
+  * https://www.eveonline.com (warzone insurgency feed)
 
 ## Run
 

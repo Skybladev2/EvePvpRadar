@@ -2773,6 +2773,12 @@ func isValidKillmail(killmail *zkillboardcache.CachedKillmail) (bool, bool) {
 	// Check if system is lowsec, nullsec, Pochven, Thera, or highsec with position data
 	isThera := killmail.SolarSystemID == TheraSystemID
 	if !isLowsecOrNullsecSystem(killmail.SolarSystemID) && !isPochvenSystem(killmail.SolarSystemID) && !isThera {
+		// Lawless systems (insurgency corruptionState=5) are PvP-active regardless of their
+		// security band, so a kill near a stargate is as relevant as in lowsec/nullsec. This is
+		// checked before the militia-only highsec rules so lawless highsec systems are included.
+		if isLawlessSystem(killmail.SolarSystemID) && isKillWithinStargateRange(killmail) {
+			return true, false
+		}
 		// Highsec (security >= 0.45) or other: valid only if near a station
 		if killmail.Victim.Position == nil {
 			system := getSystemById(killmail.SolarSystemID)
@@ -3025,7 +3031,10 @@ func buildCachedKillmail(killmail *zkillboardcache.CachedKillmail) (*CachedKillm
 		MinDistanceToStation:  minStationDist,
 	}
 
-	isHighsec := !isLowsecOrNullsecSystem(killmail.SolarSystemID) && !isPochvenSystem(killmail.SolarSystemID)
+	// Lawless systems are PvP space even when their security band is highsec; only genuine
+	// highsec militia station kills (isStation) stay in the highsec bucket.
+	isHighsec := isStation || (!isLawlessSystem(killmail.SolarSystemID) &&
+		!isLowsecOrNullsecSystem(killmail.SolarSystemID) && !isPochvenSystem(killmail.SolarSystemID))
 
 	return cachedKillmail, isHighsec, true
 }
@@ -5535,6 +5544,7 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 		} else if displayValue < 0.45 {
 			secCat = "lowsec"
 		}
+		lawless := isLawlessSystem(system.SystemID)
 
 		html.WriteString("<tr id='system-")
 		html.WriteString(strconv.Itoa(system.SystemID))
@@ -5546,6 +5556,9 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 		}
 		html.WriteString("' data-sec='")
 		html.WriteString(secCat)
+		if lawless {
+			html.WriteString("' data-lawless='true")
+		}
 		html.WriteString("'>")
 
 		html.WriteString("<td data-label='System' data-security='")
@@ -5572,6 +5585,9 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 		html.WriteString(";'>")
 		html.WriteString(displayFormatted)
 		html.WriteString("</span>)")
+		if lawless {
+			html.WriteString(" <span class='system-lawless-badge'>Lawless</span>")
+		}
 		if showUedamaScoutIcon && isUedamaScoutMonitoredSystem(system.Name) {
 			html.WriteString(" <a href='")
 			html.WriteString(uedamaScoutTwitchURL)
@@ -7658,6 +7674,9 @@ func main() {
 	killmailCache.Start()
 	log.Println("zKillboard cache service started")
 
+	// Keep lawless-system data (insurgency corruptionState=5) fresh in the background.
+	startInsurgencyRefresher()
+
 	// Register cache HTTP handlers; /metrics is served on METRICS_PORT only (see below)
 	http.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -7924,6 +7943,7 @@ func main() {
 			"DonateURL":               donateURL,
 			"DonateText":              donateText,
 			"ContainerTag":            containerTag(),
+			"NullsecFilterLabel":      nullsecFilterLabel(),
 			"AppJS":                   appJS,
 			}
 			if err := indexTmpl.ExecuteTemplate(w, "index.html", data); err != nil {
@@ -8020,6 +8040,7 @@ func main() {
 			"DonateURL":               donateURL,
 			"DonateText":              donateText,
 			"ContainerTag":            containerTag(),
+			"NullsecFilterLabel":     nullsecFilterLabel(),
 			"AppJS":                   appJS,
 		}
 		var buf bytes.Buffer

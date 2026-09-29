@@ -1655,7 +1655,7 @@ function updateFilterIndicator(counts) {
   if (!tooltip) return;
   const items = [];
   if (counts.lowsec > 0) items.push("Lowsec: " + counts.lowsec + " system" + (counts.lowsec !== 1 ? "s" : "") + " hidden");
-  if (counts.nullsec > 0) items.push("Nullsec: " + counts.nullsec + " system" + (counts.nullsec !== 1 ? "s" : "") + " hidden");
+  if (counts.nullsec > 0) items.push("Nullsec/lawless: " + counts.nullsec + " system" + (counts.nullsec !== 1 ? "s" : "") + " hidden");
   if (counts.highsec > 0) items.push("Highsec: " + counts.highsec + " system" + (counts.highsec !== 1 ? "s" : "") + " hidden");
   if (counts.pilot > 0) items.push("Pilot filter: " + counts.pilot + " system" + (counts.pilot !== 1 ? "s" : "") + " hidden");
   if (counts.tradeHub > 0) items.push("Trade hub filter: " + counts.tradeHub + " system" + (counts.tradeHub !== 1 ? "s" : "") + " hidden");
@@ -1706,9 +1706,9 @@ function applyMilitiaFilter() {
 }
 
 // Apply security filters based on checkbox states
-// Lowsec, nullsec, trade hub, and gatecamp row visibility is handled by CSS :has() rules.
+// Lowsec, nullsec/lawless, trade hub, and gatecamp row visibility is handled by CSS :has() rules.
 // Inject/update a <style> block with :has() CSS rules for attacker counts > limit.
-// CSS rules handle the actual row hiding (same approach as lowsec/nullsec/trade hub filters).
+// CSS rules handle the actual row hiding (same approach as lowsec/nullsec/lawless/trade hub filters).
 function updateMaxAttackersStyle(limit) {
   let style = document.getElementById("max-attackers-style");
   if (!style) {
@@ -1757,12 +1757,12 @@ function applySecurityFilters() {
   let hiddenByTradeHub = 0;
   let hiddenByHighsec = 0;
 
-  // Count rows hidden by CSS (lowsec, nullsec, trade hubs) for the indicator.
+  // Count rows hidden by CSS (lowsec, nullsec/lawless, trade hubs) for the indicator.
   if (!showLowsec || !showNullsec || hasHiddenHubs) {
     for (let i = 0; i < allRows.length; i++) {
       const row = allRows[i];
-      if (!showLowsec && row.getAttribute("data-sec") === "lowsec") hiddenByLowsec++;
-      if (!showNullsec && row.getAttribute("data-sec") === "nullsec") hiddenByNullsec++;
+      if (!showLowsec && row.getAttribute("data-sec") === "lowsec" && row.getAttribute("data-lawless") !== "true") hiddenByLowsec++;
+      if (!showNullsec && (row.getAttribute("data-sec") === "nullsec" || row.getAttribute("data-lawless") === "true")) hiddenByNullsec++;
       if (hasHiddenHubs) {
         const hubName = (row.getAttribute("data-trade-hub-row") || "").trim().toLowerCase();
         if (hubName && hiddenTradeHubs.has(hubName)) hiddenByTradeHub++;

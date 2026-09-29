@@ -718,6 +718,21 @@
         #result td:first-child .system-cell-name .system-twitch-link:hover .system-twitch-icon {
             filter: brightness(1.18);
         }
+        /* Lawless systems (insurgency corruptionState=5) marker */
+        #result td:first-child .system-cell-name .system-lawless-badge {
+            display: inline-block;
+            position: relative;
+            margin-left: 0.25rem;
+            padding: 0 0.25rem;
+            border-radius: 0.1875rem;
+            background: #7a1f1f;
+            color: #ffd9d9;
+            font-size: 0.7em;
+            font-weight: bold;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            vertical-align: middle;
+        }
         #result td:first-child .system-cell-destination {
             margin-top: 0.375rem;
             display: flex;
@@ -1321,9 +1336,12 @@
         #result tr.filtered-out {
             display: none;
         }
-        /* CSS-based security class filtering (no JS needed) */
-        body:has(#filter-lowsec:not(:checked)) #result tr[data-sec="lowsec"],
+        /* CSS-based security class filtering (no JS needed).
+           Lawless systems are grouped with nullsec under the "Nullsec and lawless" filter, so the
+           Lowsec/Highsec rules must not also hide them. */
+        body:has(#filter-lowsec:not(:checked)) #result tr[data-sec="lowsec"]:not([data-lawless="true"]),
         body:has(#filter-nullsec:not(:checked)) #result tr[data-sec="nullsec"],
+        body:has(#filter-nullsec:not(:checked)) #result tr[data-lawless="true"],
         body:has(#filter-gatecamps:checked) #result tr:has(.route-warning-sign) {
             display: none !important;
         }
