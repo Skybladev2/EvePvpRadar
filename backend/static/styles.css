@@ -1337,11 +1337,11 @@
             display: none;
         }
         /* CSS-based security class filtering (no JS needed).
-           Lawless systems are grouped with nullsec under the "Nullsec and lawless" filter, so the
-           Lowsec/Highsec rules must not also hide them. */
-        body:has(#filter-lowsec:not(:checked)) #result tr[data-sec="lowsec"]:not([data-lawless="true"]),
+           data-sec already accounts for lawless escalation: a lawless lowsec row is data-sec="nullsec"
+           (controlled by "Nullsec and lawless"), a lawless highsec row is data-sec="lowsec"
+           (controlled by "Lowsec and lawless"). */
+        body:has(#filter-lowsec:not(:checked)) #result tr[data-sec="lowsec"],
         body:has(#filter-nullsec:not(:checked)) #result tr[data-sec="nullsec"],
-        body:has(#filter-nullsec:not(:checked)) #result tr[data-lawless="true"],
         body:has(#filter-gatecamps:checked) #result tr:has(.route-warning-sign) {
             display: none !important;
         }

@@ -16,9 +16,10 @@ import (
 )
 
 // EVE's warzone insurgency API reports corruption/suppression progress for faction warfare
-// insurgencies. Systems whose corruptionState reaches 5 become "lawless": PvP is enabled there
-// regardless of the system's security band, so they belong in the radar and are filtered together
-// with nullsec.
+// insurgencies. Systems whose corruptionState reaches 5 become "lawless": PvP is enabled there even
+// in highsec/lowsec, so they belong in the radar and are filtered with the band below (a lawless
+// highsec system with lowsec, a lawless lowsec system with nullsec). Nullsec is lawless by design,
+// so it is never marked as an insurgency lawless system.
 const (
 	insurgencyURL = "https://www.eveonline.com/api/warzone/insurgency"
 
@@ -32,6 +33,11 @@ const (
 
 	// corruptionState value that makes a system lawless.
 	insurgencyCorruptionLawless = 5
+
+	// mockLawlessHighsecSystemID is a highsec mock system seeded as lawless in mock mode. It exists
+	// so the highsec-lawless path (a highsec system turned PvP space by corruptionState=5) is
+	// exercised without network access, alongside the lowsec Tama mock.
+	mockLawlessHighsecSystemID = 50000007
 )
 
 var lawlessSystemsGauge = promauto.NewGauge(prometheus.GaugeOpts{
@@ -67,6 +73,13 @@ func nullsecFilterLabel() string {
 		return "Nullsec and lawless"
 	}
 	return "Nullsec"
+}
+
+// lowsecFilterLabel is the label of the lowsec checkbox. The checkbox stays a plain "Lowsec" filter:
+// the insurgency feed marks systems lawless in lowsec, and those are controlled by the nullsec
+// checkbox, so naming lawless systems here claimed coverage the lowsec filter does not provide.
+func lowsecFilterLabel() string {
+	return "Lowsec"
 }
 
 // setLawlessAvailable records the outcome of an insurgency refresh. When the value changes the cached
@@ -223,8 +236,13 @@ func refreshLawlessSystems() time.Duration {
 func startInsurgencyRefresher() {
 	if mockData {
 		// Tama (lowsec) is already part of the mock kill set; marking it lawless shows the badge.
-		log.Printf("insurgency: mock mode, marking Tama (%d) as lawless", 30002813)
-		setLawlessSystems(map[int]bool{30002813: true})
+		// The highsec mock system has no station, so its stargate kill is only valid through the
+		// lawless rule — this guards against highsec systems being filtered out before that check.
+		log.Printf("insurgency: mock mode, marking Tama (%d) and highsec system %d as lawless", 30002813, mockLawlessHighsecSystemID)
+		setLawlessSystems(map[int]bool{
+			30002813:                   true, // Tama (lowsec)
+			mockLawlessHighsecSystemID: true, // highsec turned lawless
+		})
 		setLawlessAvailable(true)
 		return
 	}

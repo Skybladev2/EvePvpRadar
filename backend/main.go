@@ -4055,6 +4055,13 @@ func loadMockData(mw io.Writer) {
 		systemStationsMu.Unlock()
 	}
 
+	// Highsec system that the insurgency feed turns lawless in mock mode. It deliberately has no
+	// station, so the only way a kill here reaches the radar is the lawless (highsec PvP space)
+	// path, not the FW highsec-station rule. See startInsurgencyRefresher.
+	sysLawlessHighsec := getSystemById(mockLawlessHighsecSystemID)
+	ensureSystemExists(&sysLawlessHighsec, mockLawlessHighsecSystemID, "Mock-Highsec-Lawless", 0.5)
+	updateSystemConnection(mockLawlessHighsecSystemID, jitaHubID)
+
 	// Lowsec mock station in Tama — kills here are invalid (lowsec station kills rejected by isValidKillmail)
 	// Kept as mock data to verify filtering correctly excludes them.
 	lowsecStationID := 64000000
@@ -4425,6 +4432,10 @@ func loadMockData(mw io.Writer) {
 
 		// Near Hek: Lowsec, 1 kill, < 10 attackers
 		{hekSystem, sysHek.SystemName, sysHek.Security, 1, 6, 100024, 4 * time.Minute, "stargates"},
+
+		// System 9: Highsec turned lawless by insurgency, 1 kill, < 10 attackers, route through
+		// stargates only. The system has no station, so this kill is valid only via the lawless rule.
+		{mockLawlessHighsecSystemID, "Mock-Highsec-Lawless", 0.5, 1, 6, 100016, 2 * time.Minute, "stargates"},
 	}
 
 	// Add killmail entries for the extra mock systems
@@ -5098,6 +5109,43 @@ func displayEveSecurityForUI(s float64) float64 {
 	return math.Round(s*10) / 10
 }
 
+// securityBand returns the security category of a system from its displayed security value.
+func securityBand(displayValue float64) string {
+	switch {
+	case displayValue <= 0.0:
+		return "nullsec"
+	case displayValue < 0.45:
+		return "lowsec"
+	default:
+		return "highsec"
+	}
+}
+
+// isLawlessForFilter reports whether the lawless marker applies to a system. Nullsec is lawless by
+// design, so only highsec/lowsec systems can be "turned" lawless by an insurgency and get the badge.
+func isLawlessForFilter(systemID int, displayValue float64) bool {
+	return isLawlessSystem(systemID) && securityBand(displayValue) != "nullsec"
+}
+
+// securityFilterBand returns the security category a system row is filtered by. A system turned
+// lawless is grouped with the next band down because corruption makes it effectively PvP space: a
+// lawless lowsec system is controlled by the "Nullsec and lawless" checkbox, and a lawless highsec
+// system by the "Lowsec" checkbox. Nullsec is already PvP space and stays nullsec. The
+// displayed security value is unaffected.
+func securityFilterBand(displayValue float64, lawless bool) string {
+	if !lawless {
+		return securityBand(displayValue)
+	}
+	switch securityBand(displayValue) {
+	case "highsec":
+		return "lowsec"
+	case "lowsec":
+		return "nullsec"
+	default:
+		return "nullsec"
+	}
+}
+
 // getSecurityColor returns the color hex code for a given security value
 func getSecurityColor(securityValue float64) string {
 	// Security color mapping (same as frontend)
@@ -5537,14 +5585,11 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 			displayFormatted = "0.0"
 		}
 
-		// Security category for CSS-based filtering
-		secCat := "highsec"
-		if displayValue <= 0.0 {
-			secCat = "nullsec"
-		} else if displayValue < 0.45 {
-			secCat = "lowsec"
-		}
-		lawless := isLawlessSystem(system.SystemID)
+		// Nullsec is lawless by design; the marker only applies to highsec/lowsec systems turned
+		// lawless by an insurgency. Such systems are controlled by the filter of the band below
+		// (highsec lawless -> lowsec, lowsec lawless -> nullsec).
+		lawless := isLawlessForFilter(system.SystemID, displayValue)
+		secCat := securityFilterBand(displayValue, lawless)
 
 		html.WriteString("<tr id='system-")
 		html.WriteString(strconv.Itoa(system.SystemID))
@@ -7944,6 +7989,7 @@ func main() {
 			"DonateText":              donateText,
 			"ContainerTag":            containerTag(),
 			"NullsecFilterLabel":      nullsecFilterLabel(),
+			"LowsecFilterLabel":       lowsecFilterLabel(),
 			"AppJS":                   appJS,
 			}
 			if err := indexTmpl.ExecuteTemplate(w, "index.html", data); err != nil {
@@ -8041,6 +8087,7 @@ func main() {
 			"DonateText":              donateText,
 			"ContainerTag":            containerTag(),
 			"NullsecFilterLabel":     nullsecFilterLabel(),
+			"LowsecFilterLabel":      lowsecFilterLabel(),
 			"AppJS":                   appJS,
 		}
 		var buf bytes.Buffer

@@ -1757,12 +1757,13 @@ function applySecurityFilters() {
   let hiddenByTradeHub = 0;
   let hiddenByHighsec = 0;
 
-  // Count rows hidden by CSS (lowsec, nullsec/lawless, trade hubs) for the indicator.
+  // Count rows hidden by CSS (lowsec, nullsec/lawless, trade hubs) for the indicator. data-sec already
+  // includes lawless escalation (lawless lowsec -> nullsec, lawless highsec -> lowsec).
   if (!showLowsec || !showNullsec || hasHiddenHubs) {
     for (let i = 0; i < allRows.length; i++) {
       const row = allRows[i];
-      if (!showLowsec && row.getAttribute("data-sec") === "lowsec" && row.getAttribute("data-lawless") !== "true") hiddenByLowsec++;
-      if (!showNullsec && (row.getAttribute("data-sec") === "nullsec" || row.getAttribute("data-lawless") === "true")) hiddenByNullsec++;
+      if (!showLowsec && row.getAttribute("data-sec") === "lowsec") hiddenByLowsec++;
+      if (!showNullsec && row.getAttribute("data-sec") === "nullsec") hiddenByNullsec++;
       if (hasHiddenHubs) {
         const hubName = (row.getAttribute("data-trade-hub-row") || "").trim().toLowerCase();
         if (hubName && hiddenTradeHubs.has(hubName)) hiddenByTradeHub++;
