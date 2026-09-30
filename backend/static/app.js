@@ -1654,7 +1654,7 @@ function updateFilterIndicator(counts) {
   const tooltip = document.getElementById("filter-indicator-tooltip");
   if (!tooltip) return;
   const items = [];
-  if (counts.lowsec > 0) items.push("Lowsec: " + counts.lowsec + " system" + (counts.lowsec !== 1 ? "s" : "") + " hidden");
+  if (counts.lowsec > 0) items.push("Lowsec/lawless: " + counts.lowsec + " system" + (counts.lowsec !== 1 ? "s" : "") + " hidden");
   if (counts.nullsec > 0) items.push("Nullsec/lawless: " + counts.nullsec + " system" + (counts.nullsec !== 1 ? "s" : "") + " hidden");
   if (counts.highsec > 0) items.push("Highsec: " + counts.highsec + " system" + (counts.highsec !== 1 ? "s" : "") + " hidden");
   if (counts.pilot > 0) items.push("Pilot filter: " + counts.pilot + " system" + (counts.pilot !== 1 ? "s" : "") + " hidden");

@@ -5130,7 +5130,7 @@ func isLawlessForFilter(systemID int, displayValue float64) bool {
 // securityFilterBand returns the security category a system row is filtered by. A system turned
 // lawless is grouped with the next band down because corruption makes it effectively PvP space: a
 // lawless lowsec system is controlled by the "Nullsec and lawless" checkbox, and a lawless highsec
-// system by the "Lowsec" checkbox. Nullsec is already PvP space and stays nullsec. The
+// system by the "Lowsec and lawless" checkbox. Nullsec is already PvP space and stays nullsec. The
 // displayed security value is unaffected.
 func securityFilterBand(displayValue float64, lawless bool) string {
 	if !lawless {

@@ -254,18 +254,45 @@ func TestNullsecFilterLabelTracksAvailability(t *testing.T) {
 	}
 }
 
-// TestLowsecFilterLabelStaysPlainLowsec verifies the lowsec checkbox never advertises lawless
-// coverage: lawless systems are surfaced by the nullsec checkbox, so the lowsec label stays "Lowsec"
-// regardless of whether the insurgency feed is available.
-func TestLowsecFilterLabelStaysPlainLowsec(t *testing.T) {
-	origAvailable := lawlessDataAvailable.Load()
-	defer lawlessDataAvailable.Store(origAvailable)
+// TestLowsecFilterLabelTracksLawlessHighsec verifies the lowsec checkbox mentions lawless only while a
+// lawless highsec system exists. Such a system is escalated into the lowsec filter, so the label must
+// advertise it; a lawless lowsec system belongs to the nullsec filter and must not.
+func TestLowsecFilterLabelTracksLawlessHighsec(t *testing.T) {
+	origSystems := systems
+	lawlessSystemsMu.RLock()
+	origLawless := lawlessSystems
+	lawlessSystemsMu.RUnlock()
+	origPresent := lawlessHighsecPresent.Load()
+	defer func() {
+		systems = origSystems
+		lawlessSystemsMu.Lock()
+		lawlessSystems = origLawless
+		lawlessSystemsMu.Unlock()
+		lawlessHighsecPresent.Store(origPresent)
+	}()
 
-	for _, available := range []bool{false, true} {
-		lawlessDataAvailable.Store(available)
-		if got := lowsecFilterLabel(); got != "Lowsec" {
-			t.Fatalf("label with available=%v = %q, want %q", available, got, "Lowsec")
-		}
+	const (
+		highsecID = 70000001
+		lowsecID  = 70000002
+	)
+	systems = append([]System{
+		{SystemID: highsecID, SystemName: "Lawless Highsec", Security: 0.7},
+		{SystemID: lowsecID, SystemName: "Lawless Lowsec", Security: 0.3},
+	}, systems...)
+
+	setLawlessSystems(map[int]bool{lowsecID: true})
+	if got := lowsecFilterLabel(); got != "Lowsec" {
+		t.Fatalf("label with only a lawless lowsec system = %q, want %q", got, "Lowsec")
+	}
+
+	setLawlessSystems(map[int]bool{highsecID: true})
+	if got := lowsecFilterLabel(); got != "Lowsec and lawless" {
+		t.Fatalf("label with a lawless highsec system = %q, want %q", got, "Lowsec and lawless")
+	}
+
+	setLawlessSystems(map[int]bool{})
+	if got := lowsecFilterLabel(); got != "Lowsec" {
+		t.Fatalf("label without lawless systems = %q, want %q", got, "Lowsec")
 	}
 }
 
@@ -310,14 +337,14 @@ func TestMarkLawlessUnavailableDegradesCleanly(t *testing.T) {
 	}
 }
 
-// TestIndexTemplateRendersSecurityFilterLabels checks the index template consumes both label vars, so
-// the nullsec checkbox can follow lawless-data availability while the lowsec checkbox stays "Lowsec".
+// TestIndexTemplateRendersSecurityFilterLabels checks the index template consumes the label vars so
+// both checkbox texts follow the current lawless-data availability.
 func TestIndexTemplateRendersSecurityFilterLabels(t *testing.T) {
 	tmpl := template.Must(template.New("index").Delims("[[", "]]").ParseFS(staticFS, "static/index.html"))
 
 	for _, tc := range []struct{ nullsec, lowsec string }{
 		{"Nullsec", "Lowsec"},
-		{"Nullsec and lawless", "Lowsec"},
+		{"Nullsec and lawless", "Lowsec and lawless"},
 	} {
 		var buf bytes.Buffer
 		data := map[string]interface{}{"NullsecFilterLabel": tc.nullsec, "LowsecFilterLabel": tc.lowsec}

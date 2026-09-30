@@ -52,6 +52,10 @@ var (
 	// false the lawless set is empty, systems fall back to their normal security-band filtering, and
 	// the security checkbox is rendered as "Nullsec" instead of "Nullsec and lawless".
 	lawlessDataAvailable atomic.Bool
+	// lawlessHighsecPresent reports whether the current lawless set contains a highsec system. Such a
+	// system is PvP space and is controlled by the lowsec checkbox, so the lowsec label only mentions
+	// lawless while at least one is present.
+	lawlessHighsecPresent atomic.Bool
 )
 
 // isLawlessSystem reports whether the system currently has corruptionState 5.
@@ -75,10 +79,13 @@ func nullsecFilterLabel() string {
 	return "Nullsec"
 }
 
-// lowsecFilterLabel is the label of the lowsec checkbox. The checkbox stays a plain "Lowsec" filter:
-// the insurgency feed marks systems lawless in lowsec, and those are controlled by the nullsec
-// checkbox, so naming lawless systems here claimed coverage the lowsec filter does not provide.
+// lowsecFilterLabel is the label of the lowsec checkbox. A lawless highsec system is PvP space and is
+// controlled by this filter, so the label mentions lawless only while such a system actually exists;
+// otherwise it stays a plain "Lowsec" filter.
 func lowsecFilterLabel() string {
+	if lawlessHighsecPresent.Load() {
+		return "Lowsec and lawless"
+	}
 	return "Lowsec"
 }
 
@@ -121,9 +128,22 @@ func setLawlessSystems(next map[int]bool) {
 	lawlessSystems = next
 	lawlessSystemsMu.Unlock()
 	lawlessSystemsGauge.Set(float64(len(next)))
+	lawlessHighsecPresent.Store(lawlessSetHasHighsec(next))
 	if changed && killmailCache != nil {
 		EnsureRecalculated()
 	}
+}
+
+// lawlessSetHasHighsec reports whether the set contains a highsec system, i.e. one the lowsec checkbox
+// controls once an insurgency turns it lawless.
+func lawlessSetHasHighsec(set map[int]bool) bool {
+	for id := range set {
+		sys := getSystemById(id)
+		if sys.SystemID != 0 && securityBand(displayEveSecurityForUI(sys.Security)) == "highsec" {
+			return true
+		}
+	}
+	return false
 }
 
 // insurgencyCampaign mirrors the subset of the warzone insurgency payload we consume.
