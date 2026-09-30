@@ -237,62 +237,44 @@ func TestInsurgencyRefreshFromHeaders(t *testing.T) {
 	}
 }
 
-// TestNullsecFilterLabelTracksAvailability verifies the checkbox label falls back to "Nullsec" while
-// the insurgency feed is unavailable and mentions lawless systems once it has been fetched.
-func TestNullsecFilterLabelTracksAvailability(t *testing.T) {
-	origAvailable := lawlessDataAvailable.Load()
-	defer lawlessDataAvailable.Store(origAvailable)
-
-	lawlessDataAvailable.Store(false)
-	if got := nullsecFilterLabel(); got != "Nullsec" {
-		t.Fatalf("label with unavailable data = %q, want %q", got, "Nullsec")
+// TestSecurityFilterLabelsTrackRenderedLawlessRows verifies each security checkbox mentions lawless only
+// while the rendered table contains a lawless system it controls: a lawless highsec row is escalated to
+// data-sec='lowsec', a lawless lowsec row to data-sec='nullsec'. Basing the labels on the table rather
+// than the global insurgency set keeps them honest for the systems the user is actually looking at.
+func TestSecurityFilterLabelsTrackRenderedLawlessRows(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		table       string
+		wantNullsec string
+		wantLowsec  string
+	}{
+		{
+			name:        "no lawless rows",
+			table:       "<tr id='system-1' data-sec='nullsec'><tr id='system-2' data-sec='lowsec'>",
+			wantNullsec: "Nullsec",
+			wantLowsec:  "Lowsec",
+		},
+		{
+			name:        "lawless lowsec row is controlled by nullsec",
+			table:       "<tr id='system-3' data-sec='nullsec' data-lawless='true'>",
+			wantNullsec: "Nullsec and lawless",
+			wantLowsec:  "Lowsec",
+		},
+		{
+			name:        "lawless highsec row is controlled by lowsec",
+			table:       "<tr id='system-4' data-sec='lowsec' data-lawless='true'>",
+			wantNullsec: "Nullsec",
+			wantLowsec:  "Lowsec and lawless",
+		},
 	}
-
-	lawlessDataAvailable.Store(true)
-	if got := nullsecFilterLabel(); got != "Nullsec and lawless" {
-		t.Fatalf("label with available data = %q, want %q", got, "Nullsec and lawless")
-	}
-}
-
-// TestLowsecFilterLabelTracksLawlessHighsec verifies the lowsec checkbox mentions lawless only while a
-// lawless highsec system exists. Such a system is escalated into the lowsec filter, so the label must
-// advertise it; a lawless lowsec system belongs to the nullsec filter and must not.
-func TestLowsecFilterLabelTracksLawlessHighsec(t *testing.T) {
-	origSystems := systems
-	lawlessSystemsMu.RLock()
-	origLawless := lawlessSystems
-	lawlessSystemsMu.RUnlock()
-	origPresent := lawlessHighsecPresent.Load()
-	defer func() {
-		systems = origSystems
-		lawlessSystemsMu.Lock()
-		lawlessSystems = origLawless
-		lawlessSystemsMu.Unlock()
-		lawlessHighsecPresent.Store(origPresent)
-	}()
-
-	const (
-		highsecID = 70000001
-		lowsecID  = 70000002
-	)
-	systems = append([]System{
-		{SystemID: highsecID, SystemName: "Lawless Highsec", Security: 0.7},
-		{SystemID: lowsecID, SystemName: "Lawless Lowsec", Security: 0.3},
-	}, systems...)
-
-	setLawlessSystems(map[int]bool{lowsecID: true})
-	if got := lowsecFilterLabel(); got != "Lowsec" {
-		t.Fatalf("label with only a lawless lowsec system = %q, want %q", got, "Lowsec")
-	}
-
-	setLawlessSystems(map[int]bool{highsecID: true})
-	if got := lowsecFilterLabel(); got != "Lowsec and lawless" {
-		t.Fatalf("label with a lawless highsec system = %q, want %q", got, "Lowsec and lawless")
-	}
-
-	setLawlessSystems(map[int]bool{})
-	if got := lowsecFilterLabel(); got != "Lowsec" {
-		t.Fatalf("label without lawless systems = %q, want %q", got, "Lowsec")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			nullsec, lowsec := securityFilterLabels(tc.table)
+			if nullsec != tc.wantNullsec || lowsec != tc.wantLowsec {
+				t.Fatalf("securityFilterLabels = (%q, %q), want (%q, %q)", nullsec, lowsec, tc.wantNullsec, tc.wantLowsec)
+			}
+		})
 	}
 }
 
@@ -318,9 +300,6 @@ func TestMarkLawlessUnavailableDegradesCleanly(t *testing.T) {
 
 	if isLawlessSystem(30000142) {
 		t.Fatal("expected lawless set to be cleared after failed fetch")
-	}
-	if got := nullsecFilterLabel(); got != "Nullsec" {
-		t.Fatalf("label after failed fetch = %q, want %q", got, "Nullsec")
 	}
 
 	systems := []SystemInRange{{

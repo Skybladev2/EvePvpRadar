@@ -49,13 +49,8 @@ var (
 	lawlessSystemsMu sync.RWMutex
 	lawlessSystems   = map[int]bool{}
 	// lawlessDataAvailable reports whether the most recent insurgency refresh succeeded. While it is
-	// false the lawless set is empty, systems fall back to their normal security-band filtering, and
-	// the security checkbox is rendered as "Nullsec" instead of "Nullsec and lawless".
+	// false the lawless set is empty and systems fall back to their normal security-band filtering.
 	lawlessDataAvailable atomic.Bool
-	// lawlessHighsecPresent reports whether the current lawless set contains a highsec system. Such a
-	// system is PvP space and is controlled by the lowsec checkbox, so the lowsec label only mentions
-	// lawless while at least one is present.
-	lawlessHighsecPresent atomic.Bool
 )
 
 // isLawlessSystem reports whether the system currently has corruptionState 5.
@@ -65,32 +60,8 @@ func isLawlessSystem(systemID int) bool {
 	return lawlessSystems[systemID]
 }
 
-// lawlessDataIsAvailable reports whether the lawless set reflects a successful insurgency fetch.
-func lawlessDataIsAvailable() bool {
-	return lawlessDataAvailable.Load()
-}
-
-// nullsecFilterLabel is the label of the security checkbox. Lawless systems are only mentioned while
-// the insurgency feed is available; otherwise the filter behaves as a plain nullsec filter.
-func nullsecFilterLabel() string {
-	if lawlessDataIsAvailable() {
-		return "Nullsec and lawless"
-	}
-	return "Nullsec"
-}
-
-// lowsecFilterLabel is the label of the lowsec checkbox. A lawless highsec system is PvP space and is
-// controlled by this filter, so the label mentions lawless only while such a system actually exists;
-// otherwise it stays a plain "Lowsec" filter.
-func lowsecFilterLabel() string {
-	if lawlessHighsecPresent.Load() {
-		return "Lowsec and lawless"
-	}
-	return "Lowsec"
-}
-
 // setLawlessAvailable records the outcome of an insurgency refresh. When the value changes the cached
-// index HTML is invalidated so the security checkbox label follows suit.
+// index HTML is invalidated so the lawless markers and the security checkbox labels follow suit.
 func setLawlessAvailable(available bool) {
 	if lawlessDataAvailable.Swap(available) == available {
 		return
@@ -104,7 +75,7 @@ func setLawlessAvailable(available bool) {
 
 // markLawlessUnavailable handles a failed insurgency fetch: the lawless set is cleared so systems are
 // filtered exactly as they were before the lawless feature (by security band), without surfacing any
-// error, and the checkbox reverts to "Nullsec".
+// error, and the checkboxes revert to plain "Nullsec"/"Lowsec".
 func markLawlessUnavailable() {
 	setLawlessAvailable(false)
 	setLawlessSystems(map[int]bool{})
@@ -128,22 +99,9 @@ func setLawlessSystems(next map[int]bool) {
 	lawlessSystems = next
 	lawlessSystemsMu.Unlock()
 	lawlessSystemsGauge.Set(float64(len(next)))
-	lawlessHighsecPresent.Store(lawlessSetHasHighsec(next))
 	if changed && killmailCache != nil {
 		EnsureRecalculated()
 	}
-}
-
-// lawlessSetHasHighsec reports whether the set contains a highsec system, i.e. one the lowsec checkbox
-// controls once an insurgency turns it lawless.
-func lawlessSetHasHighsec(set map[int]bool) bool {
-	for id := range set {
-		sys := getSystemById(id)
-		if sys.SystemID != 0 && securityBand(displayEveSecurityForUI(sys.Security)) == "highsec" {
-			return true
-		}
-	}
-	return false
 }
 
 // insurgencyCampaign mirrors the subset of the warzone insurgency payload we consume.

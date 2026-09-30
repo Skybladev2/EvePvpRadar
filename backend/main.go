@@ -5146,6 +5146,22 @@ func securityFilterBand(displayValue float64, lawless bool) string {
 	}
 }
 
+// securityFilterLabels derives the security checkbox labels from the rendered table. The "and lawless"
+// suffix is shown for a band only while the table actually contains a lawless system controlled by that
+// checkbox: securityFilterBand already folds a lawless highsec system into data-sec='lowsec' and a
+// lawless lowsec system into data-sec='nullsec', so the marker plus the band tells us which checkbox
+// hides the row. This keeps the labels honest for the systems the user is actually looking at.
+func securityFilterLabels(tableHTML string) (nullsec, lowsec string) {
+	nullsec, lowsec = "Nullsec", "Lowsec"
+	if strings.Contains(tableHTML, "data-sec='nullsec' data-lawless='true'") {
+		nullsec = "Nullsec and lawless"
+	}
+	if strings.Contains(tableHTML, "data-sec='lowsec' data-lawless='true'") {
+		lowsec = "Lowsec and lawless"
+	}
+	return nullsec, lowsec
+}
+
 // getSecurityColor returns the color hex code for a given security value
 func getSecurityColor(securityValue float64) string {
 	// Security color mapping (same as frontend)
@@ -7972,6 +7988,7 @@ func main() {
 			pilotIconStandingHTML := getStandingHumanIconHTMLOrFallback()
 			filterIconHTML := getFilterIconHTMLOrFallback()
 			embedLoginImages()
+			nullsecLabel, lowsecLabel := securityFilterLabels(initialTable)
 		data := map[string]interface{}{
 				"JumpCloneTableBody":      template.HTML(jumpCloneBody), // #nosec G203 -- server-rendered only
 				"InitialTableHTML":        template.HTML(initialTable),  // #nosec G203 -- server-rendered only
@@ -7988,8 +8005,8 @@ func main() {
 			"DonateURL":               donateURL,
 			"DonateText":              donateText,
 			"ContainerTag":            containerTag(),
-			"NullsecFilterLabel":      nullsecFilterLabel(),
-			"LowsecFilterLabel":       lowsecFilterLabel(),
+			"NullsecFilterLabel":      nullsecLabel,
+			"LowsecFilterLabel":       lowsecLabel,
 			"AppJS":                   appJS,
 			}
 			if err := indexTmpl.ExecuteTemplate(w, "index.html", data); err != nil {
@@ -8070,6 +8087,7 @@ func main() {
 		pilotIconStandingHTML := getStandingHumanIconHTMLOrFallback()
 		filterIconHTML := getFilterIconHTMLOrFallback()
 		embedLoginImages()
+		nullsecLabel, lowsecLabel := securityFilterLabels(initialTable)
 		data := map[string]interface{}{
 			"JumpCloneTableBody":      template.HTML(jumpCloneBody), // #nosec G203 -- server-rendered only
 			"InitialTableHTML":        template.HTML(initialTable),  // #nosec G203 -- server-rendered only
@@ -8086,8 +8104,8 @@ func main() {
 			"DonateURL":               donateURL,
 			"DonateText":              donateText,
 			"ContainerTag":            containerTag(),
-			"NullsecFilterLabel":     nullsecFilterLabel(),
-			"LowsecFilterLabel":      lowsecFilterLabel(),
+			"NullsecFilterLabel":     nullsecLabel,
+			"LowsecFilterLabel":      lowsecLabel,
 			"AppJS":                   appJS,
 		}
 		var buf bytes.Buffer
