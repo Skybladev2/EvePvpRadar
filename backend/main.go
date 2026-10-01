@@ -551,10 +551,10 @@ type SystemInRange struct {
 	MaxShipSize            string           `json:"MaxShipSize,omitempty"` // Maximum ship size for Thera route
 	Route                  []EveScoutSystem `json:"Route,omitempty"`
 	RecentKills            []CachedKillmail `json:"recent_kills,omitempty"`
-	HighsecKills           []CachedKillmail `json:"highsec_kills,omitempty"`           // Highsec station kills (separate for data-visible-for)
-	HighsecVisibleFor     string           `json:"highsec_visible_for,omitempty"`      // Comma-separated militia short names for this system
-	TradeHub               string           `json:"trade_hub,omitempty"`                // Trade hub name for Near trade hubs mode
-	Weight                 float64          `json:"weight,omitempty"`    // Weight for Near trade hubs mode
+	HighsecKills           []CachedKillmail `json:"highsec_kills,omitempty"`       // Highsec station kills (separate for data-visible-for)
+	HighsecVisibleFor      string           `json:"highsec_visible_for,omitempty"` // Comma-separated militia short names for this system
+	TradeHub               string           `json:"trade_hub,omitempty"`           // Trade hub name for Near trade hubs mode
+	Weight                 float64          `json:"weight,omitempty"`              // Weight for Near trade hubs mode
 }
 
 func (s System) AdjacentSystemIDs() []int {
@@ -623,9 +623,9 @@ var (
 	// httpUserAgent is set at startup: USER_AGENT (base string) + commit when set
 	httpUserAgent string
 	// SDE station data: loaded once at startup from staStations.jsonl
-	stationsByID   map[int]StationSDE     // stationID -> station
-	stationsByIDMu sync.RWMutex
-	systemStations map[int][]int         // systemID -> []stationID (first is primary)
+	stationsByID     map[int]StationSDE // stationID -> station
+	stationsByIDMu   sync.RWMutex
+	systemStations   map[int][]int // systemID -> []stationID (first is primary)
 	systemStationsMu sync.RWMutex
 )
 
@@ -949,8 +949,6 @@ func initMilitiaMaps() {
 		factionByShortName[f.ShortName] = f
 	}
 }
-
-
 
 // PrecalculatedSystemData stores precalculated data for a system with kills
 type PrecalculatedSystemData struct {
@@ -1426,7 +1424,7 @@ type characterNameCacheEntry struct {
 }
 
 var (
-	characterNameCache = make(map[int]characterNameCacheEntry)
+	characterNameCache       = make(map[int]characterNameCacheEntry)
 	characterNameCacheMu     sync.RWMutex
 	characterNameCacheTTL    = time.Hour
 	characterResolveSem      = make(chan struct{}, 2) // low concurrency to avoid bursting (best practice: don't operate at the limit)
@@ -1829,10 +1827,10 @@ func getESIClient() *http.Client {
 var esiCompatibilityDate = time.Now().In(time.FixedZone("EVE", -11*60*60)).Format("2006-01-02") // ponytail: recompute at process start only; ESI date rolls at 11:00 UTC
 
 const (
-	esiMaxRetries              = 3
-	esiRetryBaseDelay          = 1 * time.Second
-	esiRetryMaxDelay           = 10 * time.Second
-	esiErrorWarnThreshold      = 20
+	esiMaxRetries             = 3
+	esiRetryBaseDelay         = 1 * time.Second
+	esiRetryMaxDelay          = 10 * time.Second
+	esiErrorWarnThreshold     = 20
 	esiRatelimitSkipThreshold = 20 // skip request when X-Ratelimit-Remaining drops below this; caller can tolerate absence
 )
 
@@ -1908,8 +1906,8 @@ func esiDo(req *http.Request) (*http.Response, error) {
 					ratelimitGroupMu.Lock()
 					ratelimitGroupRemain[rlGroup] = v
 					ratelimitGroupMu.Unlock()
-				if v < esiRatelimitSkipThreshold {
-					log.Printf("ESI ratelimit group %s remaining: %d (low!)", rlGroup, v)
+					if v < esiRatelimitSkipThreshold {
+						log.Printf("ESI ratelimit group %s remaining: %d (low!)", rlGroup, v)
 					}
 				}
 			}
@@ -3360,8 +3358,6 @@ func euniWikiShipPageURL(shipTypeName string) string {
 	return "https://wiki.eveuniversity.org/" + url.PathEscape(title)
 }
 
-
-
 // isTheraCampKill returns true if the kill indicates a possible camp in Thera:
 // - Kill in Thera, not at station
 // - Kill not within 10,000 km of any Thera station
@@ -3959,11 +3955,11 @@ func loadMockData(mw io.Writer) {
 
 	// Ensure all primary trade hubs exist in the systems list so precalculateNearTradeHubsModeForSystem
 	// can find routes to them. Only create hubs that don't already exist (avoids overwriting SDE stargates).
-	jitaHubID := 30000142 // Jita
-	amarrHubID := 30002187 // Amarr
-	rensHubID := 30002510  // Rens
+	jitaHubID := 30000142    // Jita
+	amarrHubID := 30002187   // Amarr
+	rensHubID := 30002510    // Rens
 	dodixieHubID := 30002659 // Dodixie
-	hekHubID := 30002053  // Hek
+	hekHubID := 30002053     // Hek
 
 	ensureTradeHubExists := func(hubID int, name string, sec float64) {
 		if getSystemById(hubID).SystemID == 0 {
@@ -4452,7 +4448,7 @@ func loadMockData(mw io.Writer) {
 		}
 		for j := range killCount {
 			killmailID := 1100000 + i*3 + j
-			timeOffset := time.Duration(((i * 3) + j) % 14) * time.Minute
+			timeOffset := time.Duration(((i*3)+j)%14) * time.Minute
 			mockKillmails = append(mockKillmails, struct {
 				systemID      int
 				systemName    string
@@ -4471,7 +4467,7 @@ func loadMockData(mw io.Writer) {
 	for _, hm := range highsecMocks {
 		attackerCount := 4
 		for j := 0; j < 7; j++ {
-			timeOffset := time.Duration(j * 5) * time.Minute
+			timeOffset := time.Duration(j*5) * time.Minute
 			mockKillmails = append(mockKillmails, struct {
 				systemID      int
 				systemName    string
@@ -4608,32 +4604,32 @@ func loadMockData(mw io.Writer) {
 				killTime = startTime.Add(-1 * time.Minute) // Set to 1 minute ago if somehow in future
 			}
 
-		// Generate attackers
-		attackers := make([]zkillboardcache.ESIAttacker, 0, kill.attackerCount+2)
-		// Highsec mock systems use per-system attacker factions (see highsecSystemFactions).
-		// All other systems cycle through mockFactionIDs so militia icons are visible.
-		mockFactionIDs := []int{500001, 500002, 500003, 500004, 500010, 500011}
-		hsFactions, isHighsecMock := highsecSystemFactions[systemID]
-		for j := 0; j < kill.attackerCount; j++ {
-			characterID := 1000000 + j + killmailID
-			assignShipType(characterID, nil)
-			var factionID int
-			if isHighsecMock && j < len(hsFactions) {
-				factionID = hsFactions[j]
-			} else if isHighsecMock && len(hsFactions) == 0 {
-				factionID = 0
-			} else {
-				factionID = mockFactionIDs[(killmailID+j)%len(mockFactionIDs)]
-			}
-			attackers = append(attackers, zkillboardcache.ESIAttacker{
-				CharacterID:    characterID,
-				CorporationID:  2000000 + j + killmailID,
-				AllianceID:     3000000 + j + killmailID,
-				FactionID:      factionID,
-				SecurityStatus: -2.0 + float64(j)*0.1,
-				DamageDone:     1000 + j*100,
-				FinalBlow:      j == 0,
-				WeaponTypeID:   2456, // Standard weapon
+			// Generate attackers
+			attackers := make([]zkillboardcache.ESIAttacker, 0, kill.attackerCount+2)
+			// Highsec mock systems use per-system attacker factions (see highsecSystemFactions).
+			// All other systems cycle through mockFactionIDs so militia icons are visible.
+			mockFactionIDs := []int{500001, 500002, 500003, 500004, 500010, 500011}
+			hsFactions, isHighsecMock := highsecSystemFactions[systemID]
+			for j := 0; j < kill.attackerCount; j++ {
+				characterID := 1000000 + j + killmailID
+				assignShipType(characterID, nil)
+				var factionID int
+				if isHighsecMock && j < len(hsFactions) {
+					factionID = hsFactions[j]
+				} else if isHighsecMock && len(hsFactions) == 0 {
+					factionID = 0
+				} else {
+					factionID = mockFactionIDs[(killmailID+j)%len(mockFactionIDs)]
+				}
+				attackers = append(attackers, zkillboardcache.ESIAttacker{
+					CharacterID:    characterID,
+					CorporationID:  2000000 + j + killmailID,
+					AllianceID:     3000000 + j + killmailID,
+					FactionID:      factionID,
+					SecurityStatus: -2.0 + float64(j)*0.1,
+					DamageDone:     1000 + j*100,
+					FinalBlow:      j == 0,
+					WeaponTypeID:   2456, // Standard weapon
 					ShipTypeID:     characterIDToShipTypeID[characterID],
 				})
 				if killmailID%2 == 0 && j == 0 {
@@ -5129,8 +5125,8 @@ func isLawlessForFilter(systemID int, displayValue float64) bool {
 
 // securityFilterBand returns the security category a system row is filtered by. A system turned
 // lawless is grouped with the next band down because corruption makes it effectively PvP space: a
-// lawless lowsec system is controlled by the "Nullsec and lawless" checkbox, and a lawless highsec
-// system by the "Lowsec and lawless" checkbox. Nullsec is already PvP space and stays nullsec. The
+// lawless lowsec system is controlled by the "Nullsec and lawless lowsec" checkbox, and a lawless highsec
+// system by the "Lowsec and lawless highsec" checkbox. Nullsec is already PvP space and stays nullsec. The
 // displayed security value is unaffected.
 func securityFilterBand(displayValue float64, lawless bool) string {
 	if !lawless {
@@ -5154,10 +5150,10 @@ func securityFilterBand(displayValue float64, lawless bool) string {
 func securityFilterLabels(tableHTML string) (nullsec, lowsec string) {
 	nullsec, lowsec = "Nullsec", "Lowsec"
 	if strings.Contains(tableHTML, "data-sec='nullsec' data-lawless='true'") {
-		nullsec = "Nullsec and lawless"
+		nullsec = "Nullsec and lawless lowsec"
 	}
 	if strings.Contains(tableHTML, "data-sec='lowsec' data-lawless='true'") {
-		lowsec = "Lowsec and lawless"
+		lowsec = "Lowsec and lawless highsec"
 	}
 	return nullsec, lowsec
 }
@@ -5800,32 +5796,32 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 			(system.TradeHub == "Zarzakh" && routeContainsZarzakh)
 		if !hasRedundantRouteSuffix {
 			if routeContainsThera && routeContainsZarzakh {
-			theraSuffix := " (Thera"
-			if theraEOL {
-				theraSuffix += ", EOL"
-			}
-			if system.MaxShipSize != "" {
-				theraSuffix += ", max " + template.HTMLEscapeString(system.MaxShipSize)
-				logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (Thera+Zarzakh)", system.MaxShipSize, system.Name)
-			} else {
-				logging.Debugf("HTML render: MaxShipSize is empty for system %s (Thera+Zarzakh)", system.Name)
-			}
-			theraSuffix += ", Zarzakh)"
-			html.WriteString(theraSuffix)
-		} else if routeContainsThera {
-			theraSuffix := " (Thera"
-			if theraEOL {
-				theraSuffix += ", EOL"
-			}
-			if system.MaxShipSize != "" {
-				theraSuffix += ", max " + template.HTMLEscapeString(system.MaxShipSize)
-				logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (Thera only)", system.MaxShipSize, system.Name)
-			} else {
-				logging.Debugf("HTML render: MaxShipSize is empty for system %s (Thera only), system.ViaThera=%v, system.TheraInfo=%s", system.Name, system.ViaThera, system.TheraInfo)
-			}
-			theraSuffix += ")"
-			html.WriteString(theraSuffix)
-		} else if routeContainsZarzakh {
+				theraSuffix := " (Thera"
+				if theraEOL {
+					theraSuffix += ", EOL"
+				}
+				if system.MaxShipSize != "" {
+					theraSuffix += ", max " + template.HTMLEscapeString(system.MaxShipSize)
+					logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (Thera+Zarzakh)", system.MaxShipSize, system.Name)
+				} else {
+					logging.Debugf("HTML render: MaxShipSize is empty for system %s (Thera+Zarzakh)", system.Name)
+				}
+				theraSuffix += ", Zarzakh)"
+				html.WriteString(theraSuffix)
+			} else if routeContainsThera {
+				theraSuffix := " (Thera"
+				if theraEOL {
+					theraSuffix += ", EOL"
+				}
+				if system.MaxShipSize != "" {
+					theraSuffix += ", max " + template.HTMLEscapeString(system.MaxShipSize)
+					logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (Thera only)", system.MaxShipSize, system.Name)
+				} else {
+					logging.Debugf("HTML render: MaxShipSize is empty for system %s (Thera only), system.ViaThera=%v, system.TheraInfo=%s", system.Name, system.ViaThera, system.TheraInfo)
+				}
+				theraSuffix += ")"
+				html.WriteString(theraSuffix)
+			} else if routeContainsZarzakh {
 				html.WriteString(" (Zarzakh)")
 			}
 		}
@@ -6252,8 +6248,6 @@ func mergeHighsecKills(result []SystemInRange) []SystemInRange {
 	}
 	return result
 }
-
-
 
 // zkillAsearchPilotLossesInShipURL is zKill advanced search: losses where this pilot died in this ship type.
 // Hash format matches zkillboard.com/asearch (JSON in fragment with quotes as %22).
@@ -7379,13 +7373,13 @@ func proximityHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		systemInRange := SystemInRange{
-			SystemID:    targetSystemID,
-			Name:        system.SystemName,
-			Dist:        dist,
-			Security:    system.Security,
-			RecentKills: regularKills,
+			SystemID:     targetSystemID,
+			Name:         system.SystemName,
+			Dist:         dist,
+			Security:     system.Security,
+			RecentKills:  regularKills,
 			HighsecKills: highsecKills,
-			Route:       route,
+			Route:        route,
 		}
 		if viaThera {
 			systemInRange.ViaThera = true
@@ -7974,11 +7968,11 @@ func main() {
 				initialTable += "<div id=\"result-container\" data-nosnippet><div id=\"hubs-jump-clones-loading\" class=\"hubs-jump-clones-loading\">Loading…</div>" + ccpFooterHTML + "</div>"
 			}
 			authData := map[string]interface{}{
-				"authenticated":      true,
-				"characterID":        session.CharacterID,
-				"characterName":      session.CharacterName,
-				"militiaFactionID":   session.MilitiaFactionID,
-				"militiaShortName":   session.MilitiaShortName,
+				"authenticated":    true,
+				"characterID":      session.CharacterID,
+				"characterName":    session.CharacterName,
+				"militiaFactionID": session.MilitiaFactionID,
+				"militiaShortName": session.MilitiaShortName,
 			}
 			authJSON, _ := json.Marshal(authData)
 			authBase64 := base64.StdEncoding.EncodeToString(authJSON)
@@ -7989,25 +7983,25 @@ func main() {
 			filterIconHTML := getFilterIconHTMLOrFallback()
 			embedLoginImages()
 			nullsecLabel, lowsecLabel := securityFilterLabels(initialTable)
-		data := map[string]interface{}{
-				"JumpCloneTableBody":      template.HTML(jumpCloneBody), // #nosec G203 -- server-rendered only
-				"InitialTableHTML":        template.HTML(initialTable),  // #nosec G203 -- server-rendered only
-				"AuthBase64":              template.JS(authBase64),      // #nosec G203 -- server-controlled auth JSON
-				"PilotRunningIconHTML":    template.HTML(pilotIconRunningHTML),
-				"PilotStandingIconHTML":   template.HTML(pilotIconStandingHTML),
-				"FilterIconHTML":          template.HTML(filterIconHTML),
-			"ShipIconsStyle":          getShipIconsEmbeddedStyle(),
-			"MilitiaIconsStyle":       getMilitiaIconsEmbeddedStyle(),
-			"TradeHubFilterCSS":       renderTradeHubFilterCSS(),
-			"PageStyles":              pageStyles,
-			"LoginImageLargeDataURI":  loginImageLargeDataURI,
-			"LoginImageSmallDataURI":  loginImageSmallDataURI,
-			"DonateURL":               donateURL,
-			"DonateText":              donateText,
-			"ContainerTag":            containerTag(),
-			"NullsecFilterLabel":      nullsecLabel,
-			"LowsecFilterLabel":       lowsecLabel,
-			"AppJS":                   appJS,
+			data := map[string]interface{}{
+				"JumpCloneTableBody":     template.HTML(jumpCloneBody), // #nosec G203 -- server-rendered only
+				"InitialTableHTML":       template.HTML(initialTable),  // #nosec G203 -- server-rendered only
+				"AuthBase64":             template.JS(authBase64),      // #nosec G203 -- server-controlled auth JSON
+				"PilotRunningIconHTML":   template.HTML(pilotIconRunningHTML),
+				"PilotStandingIconHTML":  template.HTML(pilotIconStandingHTML),
+				"FilterIconHTML":         template.HTML(filterIconHTML),
+				"ShipIconsStyle":         getShipIconsEmbeddedStyle(),
+				"MilitiaIconsStyle":      getMilitiaIconsEmbeddedStyle(),
+				"TradeHubFilterCSS":      renderTradeHubFilterCSS(),
+				"PageStyles":             pageStyles,
+				"LoginImageLargeDataURI": loginImageLargeDataURI,
+				"LoginImageSmallDataURI": loginImageSmallDataURI,
+				"DonateURL":              donateURL,
+				"DonateText":             donateText,
+				"ContainerTag":           containerTag(),
+				"NullsecFilterLabel":     nullsecLabel,
+				"LowsecFilterLabel":      lowsecLabel,
+				"AppJS":                  appJS,
 			}
 			if err := indexTmpl.ExecuteTemplate(w, "index.html", data); err != nil {
 				log.Printf("Error executing index template: %v", err)
@@ -8089,24 +8083,24 @@ func main() {
 		embedLoginImages()
 		nullsecLabel, lowsecLabel := securityFilterLabels(initialTable)
 		data := map[string]interface{}{
-			"JumpCloneTableBody":      template.HTML(jumpCloneBody), // #nosec G203 -- server-rendered only
-			"InitialTableHTML":        template.HTML(initialTable),  // #nosec G203 -- server-rendered only
-			"AuthBase64":              template.JS(authBase64),      // #nosec G203 -- server-controlled auth JSON
-			"PilotRunningIconHTML":    template.HTML(pilotIconRunningHTML),
-			"PilotStandingIconHTML":   template.HTML(pilotIconStandingHTML),
-			"FilterIconHTML":          template.HTML(filterIconHTML),
-			"ShipIconsStyle":          getShipIconsEmbeddedStyle(),
-			"MilitiaIconsStyle":       getMilitiaIconsEmbeddedStyle(),
-			"TradeHubFilterCSS":       renderTradeHubFilterCSS(),
-			"PageStyles":              pageStyles,
-			"LoginImageLargeDataURI":  loginImageLargeDataURI,
-			"LoginImageSmallDataURI":  loginImageSmallDataURI,
-			"DonateURL":               donateURL,
-			"DonateText":              donateText,
-			"ContainerTag":            containerTag(),
+			"JumpCloneTableBody":     template.HTML(jumpCloneBody), // #nosec G203 -- server-rendered only
+			"InitialTableHTML":       template.HTML(initialTable),  // #nosec G203 -- server-rendered only
+			"AuthBase64":             template.JS(authBase64),      // #nosec G203 -- server-controlled auth JSON
+			"PilotRunningIconHTML":   template.HTML(pilotIconRunningHTML),
+			"PilotStandingIconHTML":  template.HTML(pilotIconStandingHTML),
+			"FilterIconHTML":         template.HTML(filterIconHTML),
+			"ShipIconsStyle":         getShipIconsEmbeddedStyle(),
+			"MilitiaIconsStyle":      getMilitiaIconsEmbeddedStyle(),
+			"TradeHubFilterCSS":      renderTradeHubFilterCSS(),
+			"PageStyles":             pageStyles,
+			"LoginImageLargeDataURI": loginImageLargeDataURI,
+			"LoginImageSmallDataURI": loginImageSmallDataURI,
+			"DonateURL":              donateURL,
+			"DonateText":             donateText,
+			"ContainerTag":           containerTag(),
 			"NullsecFilterLabel":     nullsecLabel,
 			"LowsecFilterLabel":      lowsecLabel,
-			"AppJS":                   appJS,
+			"AppJS":                  appJS,
 		}
 		var buf bytes.Buffer
 		if err := indexTmpl.ExecuteTemplate(&buf, "index.html", data); err != nil {

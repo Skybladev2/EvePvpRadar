@@ -258,14 +258,14 @@ func TestSecurityFilterLabelsTrackRenderedLawlessRows(t *testing.T) {
 		{
 			name:        "lawless lowsec row is controlled by nullsec",
 			table:       "<tr id='system-3' data-sec='nullsec' data-lawless='true'>",
-			wantNullsec: "Nullsec and lawless",
+			wantNullsec: "Nullsec and lawless lowsec",
 			wantLowsec:  "Lowsec",
 		},
 		{
 			name:        "lawless highsec row is controlled by lowsec",
 			table:       "<tr id='system-4' data-sec='lowsec' data-lawless='true'>",
 			wantNullsec: "Nullsec",
-			wantLowsec:  "Lowsec and lawless",
+			wantLowsec:  "Lowsec and lawless highsec",
 		},
 	}
 	for _, tc := range cases {
@@ -323,7 +323,7 @@ func TestIndexTemplateRendersSecurityFilterLabels(t *testing.T) {
 
 	for _, tc := range []struct{ nullsec, lowsec string }{
 		{"Nullsec", "Lowsec"},
-		{"Nullsec and lawless", "Lowsec and lawless"},
+		{"Nullsec and lawless lowsec", "Lowsec and lawless highsec"},
 	} {
 		var buf bytes.Buffer
 		data := map[string]interface{}{"NullsecFilterLabel": tc.nullsec, "LowsecFilterLabel": tc.lowsec}

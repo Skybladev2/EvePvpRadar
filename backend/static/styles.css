@@ -1338,8 +1338,8 @@
         }
         /* CSS-based security class filtering (no JS needed).
            data-sec already accounts for lawless escalation: a lawless lowsec row is data-sec="nullsec"
-           (controlled by "Nullsec and lawless"), a lawless highsec row is data-sec="lowsec"
-           (controlled by "Lowsec and lawless"). */
+           (controlled by "Nullsec and lawless lowsec"), a lawless highsec row is data-sec="lowsec"
+           (controlled by "Lowsec and lawless highsec"). */
         body:has(#filter-lowsec:not(:checked)) #result tr[data-sec="lowsec"],
         body:has(#filter-nullsec:not(:checked)) #result tr[data-sec="nullsec"],
         body:has(#filter-gatecamps:checked) #result tr:has(.route-warning-sign) {
