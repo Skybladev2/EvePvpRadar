@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -164,6 +165,12 @@ type RouteFinder struct {
 	lastTheraFetch atomic.Int64 // Stores unix timestamp in nanoseconds
 	// Last time EVE Scout API was called (atomic for rate limiting)
 	lastEveScoutRequest atomic.Int64 // Stores unix timestamp in nanoseconds
+	// theraFetchMu serialises Thera signature fetches so that concurrent route
+	// lookups cannot each start their own request to EVE Scout.
+	theraFetchMu sync.Mutex
+	// lastTheraAttempt is the last time a fetch was attempted (success OR failure).
+	// Used to back off retries while the EVE Scout API is unreachable.
+	lastTheraAttempt atomic.Int64 // Stores unix timestamp in nanoseconds
 
 	// HTTP client for API calls (for testing) - rarely changed, no protection needed
 	httpClient *http.Client
@@ -476,26 +483,50 @@ func (rf *RouteFinder) BuildPath(paths *ShortestPaths, toSystemID int) []int {
 	return path
 }
 
-// EnsureTheraSignaturesFresh refreshes Thera signatures when the 1-minute cache is stale.
-func (rf *RouteFinder) EnsureTheraSignaturesFresh() {
-	lastFetchNanos := rf.lastTheraFetch.Load()
-	lastFetch := time.Unix(0, lastFetchNanos)
-	if time.Since(lastFetch) > 1*time.Minute {
-		rf.fetchTheraSignatures()
+const (
+	// theraSignaturesTTL is how long a successful Thera signature fetch stays fresh.
+	theraSignaturesTTL = 1 * time.Minute
+	// theraFetchFailureBackoff is how long to wait after a failed fetch before trying
+	// again. Without it a single unavailable EVE Scout API turns every route lookup into
+	// another 10s request, so one page render (dozens of lookups) blocks for minutes.
+	theraFetchFailureBackoff = 30 * time.Second
+)
+
+// theraRefreshNeeded reports whether the cached Thera signatures should be refreshed now:
+// they are stale and we are not inside the post-failure backoff window.
+func (rf *RouteFinder) theraRefreshNeeded() bool {
+	now := time.Now()
+	if last := rf.lastTheraAttempt.Load(); last != 0 && now.Sub(time.Unix(0, last)) < theraFetchFailureBackoff {
+		return false // a recent attempt failed; back off
 	}
+	if last := rf.lastTheraFetch.Load(); last != 0 && now.Sub(time.Unix(0, last)) < theraSignaturesTTL {
+		return false // cache is fresh
+	}
+	return true
+}
+
+// triggerTheraRefresh schedules a background Thera refresh when the cache is stale.
+// It never blocks the caller, so request paths stay responsive when EVE Scout is slow
+// or unreachable. Concurrent callers are collapsed by the single-flight fetch lock.
+func (rf *RouteFinder) triggerTheraRefresh() {
+	if !rf.theraRefreshNeeded() {
+		return
+	}
+	go rf.fetchTheraSignaturesInternal(false)
+}
+
+// EnsureTheraSignaturesFresh refreshes Thera signatures in the background when the
+// cache is stale. The call returns immediately; callers use the data currently loaded.
+func (rf *RouteFinder) EnsureTheraSignaturesFresh() {
+	rf.triggerTheraRefresh()
 }
 
 // FindShortestRouteWithThera finds the shortest route, considering Thera wormholes.
 // maxJumps limits the search (0 = unlimited).
 func (rf *RouteFinder) FindShortestRouteWithThera(fromSystemID, toSystemID, maxJumps int) (*Route, error) {
-	// Refresh Thera signatures if needed (cache for 1 minute to reduce load on EVE Scout API)
-	lastFetchNanos := rf.lastTheraFetch.Load()
-	lastFetch := time.Unix(0, lastFetchNanos)
-	needsRefresh := time.Since(lastFetch) > 1*time.Minute
-
-	if needsRefresh {
-		rf.fetchTheraSignatures()
-	}
+	// Refresh Thera signatures in the background if needed; never block the request on
+	// the EVE Scout API. Route finding uses whatever signatures are currently loaded.
+	rf.triggerTheraRefresh()
 
 	// Try direct route first
 	directRoute, directErr := rf.FindShortestRoute(fromSystemID, toSystemID, maxJumps)
@@ -597,39 +628,31 @@ func (rf *RouteFinder) FindShortestRouteWithThera(fromSystemID, toSystemID, maxJ
 	return theraRoutes[0], nil
 }
 
-// fetchTheraSignatures fetches Thera signatures from EVE Scout API
-// Cached for 1 minute to reduce load on EVE Scout API
+// fetchTheraSignatures fetches Thera signatures from the EVE Scout API when the cache is
+// stale. Concurrent fetches are collapsed by theraFetchMu; a failed fetch is backed off so
+// callers do not hammer the API.
 func (rf *RouteFinder) fetchTheraSignatures() {
-	// Double-check cache to prevent concurrent fetches (cache for 1 minute)
-	lastFetchNanos := rf.lastTheraFetch.Load()
-	lastFetch := time.Unix(0, lastFetchNanos)
-	if time.Since(lastFetch) <= 1*time.Minute {
-		return // Already fetched recently, skip
+	rf.fetchTheraSignaturesInternal(false)
+}
+
+// fetchTheraSignaturesInternal performs the actual fetch. When force is false the fetch is
+// skipped if the cache is fresh or we are inside the post-failure backoff window.
+func (rf *RouteFinder) fetchTheraSignaturesInternal(force bool) {
+	// Single-flight: if a fetch is already running, use the data we already have.
+	if !rf.theraFetchMu.TryLock() {
+		return
 	}
+	defer rf.theraFetchMu.Unlock()
 
-	// Rate limiting (don't fetch more than once per 500ms)
-	lastRequestNanos := rf.lastEveScoutRequest.Load()
-	lastRequest := time.Unix(0, lastRequestNanos)
-	elapsed := time.Since(lastRequest)
-	needsWait := elapsed < 500*time.Millisecond
-
-	// Update request time atomically
-	nowNanos := time.Now().UnixNano()
-	rf.lastEveScoutRequest.Store(nowNanos)
+	if !force && !rf.theraRefreshNeeded() {
+		return
+	}
+	// Record the attempt up front so a failure backs off every caller, not just this one.
+	rf.lastTheraAttempt.Store(time.Now().UnixNano())
 
 	// Read values needed for HTTP request (not protected by mutex - rarely changed)
 	url := rf.theraAPIBaseURL + "/v2/public/signatures"
 	client := rf.httpClient
-
-	if needsWait {
-		time.Sleep(500*time.Millisecond - elapsed)
-		// Re-check cache after sleep in case another goroutine fetched while we waited
-		lastFetchNanos = rf.lastTheraFetch.Load()
-		lastFetch = time.Unix(0, lastFetchNanos)
-		if time.Since(lastFetch) <= 1*time.Minute {
-			return
-		}
-	}
 
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -749,13 +772,6 @@ func (rf *RouteFinder) fetchTheraSignatures() {
 
 	// Use the filtered list
 	theraResponse = EveScoutTheraResponse{Signatures: theraSignatures}
-
-	// Final check - another goroutine might have fetched while we were making the request
-	lastFetchNanos = rf.lastTheraFetch.Load()
-	lastFetch = time.Unix(0, lastFetchNanos)
-	if time.Since(lastFetch) <= 1*time.Minute {
-		return
-	}
 
 	// Update Thera signatures and adjacency maps using double-buffer Write
 	rf.graphData.Write(func(data *GraphData) {
@@ -1094,11 +1110,10 @@ func (rf *RouteFinder) GetTheraSignatureIDsForRoute(path []int) (inboundSig, out
 	return inboundSig, outboundSig, eol
 }
 
-// ForceFetchTheraSignatures forces a fetch of Thera signatures (bypasses cache)
+// ForceFetchTheraSignatures forces a fetch of Thera signatures, bypassing the freshness
+// check (used by the periodic update listener). Still single-flight and context-bounded.
 func (rf *RouteFinder) ForceFetchTheraSignatures() {
-	// Reset timestamp to 0 (epoch) to force fetch
-	rf.lastTheraFetch.Store(0)
-	rf.fetchTheraSignatures()
+	rf.fetchTheraSignaturesInternal(true)
 }
 
 // SetMockTheraSignaturesWithWhType sets mock Thera signatures with WhType information

@@ -3683,6 +3683,9 @@ func setupTheraUpdateListener() {
 		defer ticker.Stop()
 
 		lastTheraFingerprint := ""
+		// Kick off the first fetch immediately instead of waiting a full minute, so Thera
+		// routes are available soon after startup.
+		globalRouteFinder.EnsureTheraSignaturesFresh()
 
 		for range ticker.C {
 			if globalRouteFinder == nil {

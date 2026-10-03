@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -651,5 +652,70 @@ func TestStripTheraWormholeEdges(t *testing.T) {
 	}
 	if len(data.Adjacency[TheraSystemID]) != 0 {
 		t.Fatalf("Thera adjacency should be empty, got %v", data.Adjacency[TheraSystemID])
+	}
+}
+
+// TestTheraFetchFailureBackoff verifies that once a Thera fetch fails, further
+// non-forced fetches are suppressed by the backoff window instead of hammering the
+// EVE Scout API on every route lookup.
+func TestTheraFetchFailureBackoff(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	rf := NewRouteFinder(nil)
+	rf.SetTheraAPIBaseURL(server.URL)
+	rf.SetHTTPClient(server.Client())
+
+	rf.fetchTheraSignatures() // first attempt fails and records the attempt time
+	rf.fetchTheraSignatures() // must be skipped by the backoff window
+
+	mu.Lock()
+	got := requests
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("expected 1 request while backing off, got %d", got)
+	}
+
+	rf.ForceFetchTheraSignatures() // force bypasses the backoff window
+
+	mu.Lock()
+	got = requests
+	mu.Unlock()
+	if got != 2 {
+		t.Fatalf("expected 2 requests after forced fetch, got %d", got)
+	}
+}
+
+// TestFindShortestRouteWithTheraDoesNotBlockOnSlowAPI verifies that route lookups on the
+// request path never wait for the EVE Scout API: a hanging upstream must not stall callers.
+func TestFindShortestRouteWithTheraDoesNotBlockOnSlowAPI(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release // simulate an unresponsive upstream
+	}))
+	defer server.Close()
+	defer close(release)
+
+	rf := NewRouteFinder(nil)
+	rf.SetTheraAPIBaseURL(server.URL)
+	rf.SetHTTPClient(server.Client())
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = rf.FindShortestRouteWithThera(30000142, 30002510, 0)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("FindShortestRouteWithThera blocked on the EVE Scout API")
 	}
 }
