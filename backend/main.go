@@ -5794,52 +5794,28 @@ func renderHTMLTableWithNames(systems []SystemInRange, mode string, characterNam
 				break
 			}
 		}
-		// Don't add redundant route suffix when trade hub already identifies the origin
-		hasRedundantRouteSuffix := (system.TradeHub == "Thera" && routeContainsThera) ||
-			(system.TradeHub == "Zarzakh" && routeContainsZarzakh)
-		if !hasRedundantRouteSuffix {
-			if routeContainsThera && routeContainsZarzakh {
-				theraSuffix := " (Thera"
-				if theraEOL {
-					theraSuffix += ", EOL"
-				}
-				if system.MaxShipSize != "" {
-					theraSuffix += ", max " + template.HTMLEscapeString(system.MaxShipSize)
-					logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (Thera+Zarzakh)", system.MaxShipSize, system.Name)
-				} else {
-					logging.Debugf("HTML render: MaxShipSize is empty for system %s (Thera+Zarzakh)", system.Name)
-				}
-				theraSuffix += ", Zarzakh)"
-				html.WriteString(theraSuffix)
-			} else if routeContainsThera {
-				theraSuffix := " (Thera"
-				if theraEOL {
-					theraSuffix += ", EOL"
-				}
-				if system.MaxShipSize != "" {
-					theraSuffix += ", max " + template.HTMLEscapeString(system.MaxShipSize)
-					logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (Thera only)", system.MaxShipSize, system.Name)
-				} else {
-					logging.Debugf("HTML render: MaxShipSize is empty for system %s (Thera only), system.ViaThera=%v, system.TheraInfo=%s", system.Name, system.ViaThera, system.TheraInfo)
-				}
-				theraSuffix += ")"
-				html.WriteString(theraSuffix)
-			} else if routeContainsZarzakh {
-				html.WriteString(" (Zarzakh)")
-			}
+		// Build the "via special system" suffix. A route can pass through both Thera and
+		// Zarzakh, so redundancy is decided per system: a label is dropped only when it
+		// matches the trade hub the route originated from. A Zarzakh-hub route that also
+		// goes through Thera keeps the Thera label, because the ship size limit comes from
+		// the Thera wormhole. A Thera-hub route drops the Thera label (the origin is
+		// already shown in the Trade hub column).
+		var specialParts []string
+		if routeContainsThera && system.TradeHub != "Thera" {
+			specialParts = append(specialParts, "Thera")
 		}
-		// Show EOL and max ship size for Thera routes even when trade hub suppresses the redundant suffix
-		if hasRedundantRouteSuffix && routeContainsThera {
-			var theraParts []string
-			if theraEOL {
-				theraParts = append(theraParts, "EOL")
-			}
-			if system.MaxShipSize != "" {
-				theraParts = append(theraParts, "max "+template.HTMLEscapeString(system.MaxShipSize))
-			}
-			if len(theraParts) > 0 {
-				html.WriteString(" (" + strings.Join(theraParts, ", ") + ")")
-			}
+		if routeContainsThera && theraEOL {
+			specialParts = append(specialParts, "EOL")
+		}
+		if routeContainsThera && system.MaxShipSize != "" {
+			specialParts = append(specialParts, "max "+template.HTMLEscapeString(system.MaxShipSize))
+			logging.Debugf("HTML render: Adding MaxShipSize=%s for system %s (via Thera)", system.MaxShipSize, system.Name)
+		}
+		if routeContainsZarzakh && system.TradeHub != "Zarzakh" {
+			specialParts = append(specialParts, "Zarzakh")
+		}
+		if len(specialParts) > 0 {
+			html.WriteString(" (" + strings.Join(specialParts, ", ") + ")")
 		}
 		html.WriteString("</span>")
 

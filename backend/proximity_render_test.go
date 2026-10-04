@@ -210,3 +210,71 @@ func TestRenderProximityTableShowsESIFailurePilotTooltip(t *testing.T) {
 		t.Fatalf("expected detailed tooltip instead of generic Pilot")
 	}
 }
+
+// A route can pass through both Zarzakh and Thera. When the trade hub is Zarzakh,
+// the Zarzakh label is redundant, but the Thera label must still be shown: the ship
+// size limit comes from the Thera wormhole, so omitting "Thera" hides route information.
+// A Thera-hub route, by contrast, drops the Thera label as redundant.
+func TestRenderRouteSuffixKeepsTheraForZarzakhHub(t *testing.T) {
+	kill := CachedKillmail{
+		KillmailID:   1,
+		KillmailTime: time.Now().UTC().Add(-5 * time.Minute).Format("2006-01-02T15:04:05Z"),
+	}
+	rows := []SystemInRange{
+		{
+			SystemID:    30000142,
+			Name:        "Via Thera from Zarzakh",
+			Dist:        14,
+			TradeHub:    "Zarzakh",
+			ViaThera:    true,
+			MaxShipSize: "Battlecruiser",
+			RecentKills: []CachedKillmail{kill},
+			Route: []EveScoutSystem{
+				{SystemID: ZarzakhSystemID, SystemName: "Zarzakh"},
+				{SystemID: TheraSystemID, SystemName: "Thera"},
+				{SystemID: 30000142, SystemName: "Via Thera from Zarzakh"},
+			},
+		},
+		{
+			SystemID:    30000143,
+			Name:        "From Thera",
+			Dist:        8,
+			TradeHub:    "Thera",
+			ViaThera:    true,
+			MaxShipSize: "Freighter",
+			RecentKills: []CachedKillmail{kill},
+			Route: []EveScoutSystem{
+				{SystemID: TheraSystemID, SystemName: "Thera"},
+				{SystemID: 30000143, SystemName: "From Thera"},
+			},
+		},
+		{
+			SystemID:    30000144,
+			Name:        "Direct Zarzakh",
+			Dist:        9,
+			TradeHub:    "Zarzakh",
+			RecentKills: []CachedKillmail{kill},
+			Route: []EveScoutSystem{
+				{SystemID: ZarzakhSystemID, SystemName: "Zarzakh"},
+				{SystemID: 30000144, SystemName: "Direct Zarzakh"},
+			},
+		},
+	}
+
+	html := renderHTMLTableWithNames(rows, "near_trade_hubs", nil, nil, "")
+	if !strings.Contains(html, "14 (Thera, max Battlecruiser)") {
+		t.Fatalf("expected Thera label for Zarzakh-hub route via Thera, got: %s", html)
+	}
+	if !strings.Contains(html, "8 (max Freighter)") {
+		t.Fatalf("expected Thera label to be suppressed for Thera-hub route, got: %s", html)
+	}
+	if strings.Contains(html, "8 (Thera") {
+		t.Fatalf("did not expect redundant Thera label for Thera hub, got: %s", html)
+	}
+	if !strings.Contains(html, "9</span>") {
+		t.Fatalf("expected no suffix for direct Zarzakh route, got: %s", html)
+	}
+	if strings.Contains(html, "(Zarzakh)") {
+		t.Fatalf("did not expect a redundant Zarzakh label for the Zarzakh hub, got: %s", html)
+	}
+}
