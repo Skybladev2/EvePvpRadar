@@ -3631,13 +3631,11 @@ func EnsureRecalculated() {
 }
 
 // appReadyForBalancer is true when initial R2Z2 backfill (and post-backfill hook) has finished and no full precalculation rebuild is running.
+// appReadyForBalancer reports readiness for the load balancer. Readiness only covers
+// startup: once the initial backfill has finished the app serves requests from the
+// current buffer, so an in-progress route recalculation must not make it unready.
 func appReadyForBalancer() bool {
-	if killmailCache == nil || !killmailCache.WarmupComplete() {
-		return false
-	}
-	recalcMu.Lock()
-	defer recalcMu.Unlock()
-	return !recalcInProgress
+	return killmailCache != nil && killmailCache.WarmupComplete()
 }
 
 // recalculateForTheraUpdate recalculates data for all killmails in cache from the last hour when Thera signatures update.
