@@ -104,5 +104,15 @@ echo "Building images${NO_CACHE:+" with no cache"}..."
 # shellcheck disable=SC2086
 DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose build $NO_CACHE --provenance=false frontend backend
 
+# Docker installed from the snap does not read ~/.docker/config.json (its HOME
+# is remapped to $SNAP_DATA), so stored registry credentials are invisible to
+# it and pushes to cr.yandex fail with 401 Unauthorized. Log in with a fresh
+# IAM token before pushing.
+REGISTRY="${FRONTEND_IMAGE%%/*}"
+if [ "$REGISTRY" = "cr.yandex" ] && command -v yc >/dev/null 2>&1; then
+  echo "Authenticating to $REGISTRY with an IAM token..."
+  yc iam create-token | docker login --username iam --password-stdin "$REGISTRY"
+fi
+
 echo "Pushing images to container registry..."
 docker compose push frontend backend
