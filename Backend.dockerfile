@@ -1,6 +1,6 @@
 # Build stage
-# Base image tag: golang:1.26.10-alpine3.23
-FROM golang:1.26.10-alpine3.23@sha256:34414731924cf2263160f0021f5cf6e1807382d85248f7cb419d4187b96d5e43 AS builder
+# Base image tag: golang:1.26.11-alpine3.23
+FROM golang:1.26.11-alpine3.23@sha256:23f198931d4bd83b4f5a613bd75656257ae8bf832dcbc2db80e1050b5219ca2a AS builder
 
 WORKDIR /app
 
@@ -35,7 +35,7 @@ RUN go run github.com/evanw/esbuild/cmd/esbuild@${ESBUILD_VERSION} \
 # Pin Go CLI tool versions so Docker builds don't auto-update to "too new" releases.
 # You can override these build args in `docker compose build`.
 ARG STATICCHECK_VERSION=v0.7.0
-ARG OSV_SCANNER_VERSION=v1
+ARG OSV_SCANNER_VERSION=v1.9.2
 
 RUN go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./... && \
     go run github.com/google/osv-scanner/cmd/osv-scanner@${OSV_SCANNER_VERSION} --lockfile go.mod

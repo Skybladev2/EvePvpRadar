@@ -1,6 +1,6 @@
 module evepvpsearch
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/joho/godotenv v1.5.1
