@@ -7709,8 +7709,49 @@ func main() {
 	// Keep lawless-system data (insurgency corruptionState=5) fresh in the background.
 	startInsurgencyRefresher()
 
-	// Register cache HTTP handlers; /metrics is served on METRICS_PORT only (see below)
-	http.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+	// Set up Thera update listener
+	setupTheraUpdateListener()
+	log.Println("Thera update listener started")
+
+	fmt.Fprintln(mw, "Startup time: ", time.Since(startTime))
+	fmt.Fprintf(mw, "Server is listening on port %s (metrics on %s)...\n", port, metricsPort)      // #nosec G705 -- log output, not HTML
+	fmt.Fprintf(logFile, "Server is listening on port %s (metrics on %s)...\n", port, metricsPort) // #nosec G705 -- log file, not HTML
+
+	mainHandler := securityHeadersMiddleware(metricsMiddleware(newPublicMux(startTime)))
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           mainHandler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
+		fmt.Fprintln(mw, "Error starting server:", err)
+		fmt.Fprintln(logFile, "Error starting server:", err)
+	}
+
+	// filter out deployables?
+	// https://zkillboard.com/kill/121004544/
+	// https://zkillboard.com/kill/121097098/
+	// https://zkillboard.com/kill/121172883/ (npc kill)
+}
+
+// newPublicMux builds the public HTTP routing table. It deliberately avoids
+// http.DefaultServeMux: imported packages (notably expvar via Prometheus) register
+// debug handlers such as /debug/vars on the default mux during init, and those
+// handlers must never be reachable from the public listener.
+func newPublicMux(startTime time.Time) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	// Never expose Go runtime debug or metrics endpoints on the public listener.
+	debugNotFound := func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }
+	mux.HandleFunc("/debug", debugNotFound)
+	mux.HandleFunc("/debug/", debugNotFound)
+	mux.HandleFunc("/metrics", debugNotFound)
+
+	// Register cache HTTP handlers; /metrics is served on METRICS_PORT only (dedicated metrics mux in main).
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -7733,10 +7774,6 @@ func main() {
 		}
 	}
 
-	// Set up Thera update listener
-	setupTheraUpdateListener()
-	log.Println("Thera update listener started")
-
 	// CORS middleware for credentialed auth API endpoints (allowlist only; see setCORSHeadersForCredentialedAPI).
 	corsHandler := func(handler http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -7752,20 +7789,20 @@ func main() {
 	}
 
 	// SSO authentication endpoints
-	http.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		setCORSHeadersForCredentialedAPI(w, r)
 		_ = json.NewEncoder(w).Encode(map[string]string{"logLevel": logging.Level()})
 	})
-	http.HandleFunc("/api/auth/login", ssoLoginHandler)
-	http.HandleFunc("/api/auth/callback", ssoCallbackHandler)
-	http.HandleFunc("/api/auth/logout", corsHandler(ssoLogoutHandler))
-	http.HandleFunc("/api/auth/location", corsHandler(ssoLocationHandler))
-	http.HandleFunc("/api/auth/waypoint", corsHandler(ssoWaypointHandler))
-	http.HandleFunc("/api/auth/militia", corsHandler(ssoMilitiaHandler))
+	mux.HandleFunc("/api/auth/login", ssoLoginHandler)
+	mux.HandleFunc("/api/auth/callback", ssoCallbackHandler)
+	mux.HandleFunc("/api/auth/logout", corsHandler(ssoLogoutHandler))
+	mux.HandleFunc("/api/auth/location", corsHandler(ssoLocationHandler))
+	mux.HandleFunc("/api/auth/waypoint", corsHandler(ssoWaypointHandler))
+	mux.HandleFunc("/api/auth/militia", corsHandler(ssoMilitiaHandler))
 
 	// API endpoints (must be registered before static file server to avoid conflicts)
-	http.HandleFunc("/api/systems/search", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/systems/search", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Content-Type", "application/json")
 
@@ -7795,22 +7832,22 @@ func main() {
 
 		_ = json.NewEncoder(w).Encode(results)
 	})
-	http.HandleFunc("/api/types.json", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/types.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		http.ServeFile(w, r, "./generated/types.json")
 	})
-	http.HandleFunc("/api/systems.json", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/systems.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		http.ServeFile(w, r, "./generated/systems.json")
 	})
-	http.HandleFunc("/api/qualified_trade_hubs.json", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/qualified_trade_hubs.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		http.ServeFile(w, r, "./data/qualified_trade_hubs.json")
 	})
 
-	http.HandleFunc("/api/proximity.html", corsHandler(gzipHandler(proximityHandler)))
+	mux.HandleFunc("/api/proximity.html", corsHandler(gzipHandler(proximityHandler)))
 
-	http.HandleFunc("/api/near_trade_hubs.html", gzipHandler(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/near_trade_hubs.html", gzipHandler(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Content-Type", "text/html")
 		factionShortName := ""
@@ -7835,12 +7872,9 @@ func main() {
 	}))
 
 	// FW mode: serve pre-rendered HTML per militia faction
-	fmt.Fprintln(mw, "Startup time: ", time.Since(startTime))
-	fmt.Fprintf(mw, "Server is listening on port %s (metrics on %s)...\n", port, metricsPort)      // #nosec G705 -- log output, not HTML
-	fmt.Fprintf(logFile, "Server is listening on port %s (metrics on %s)...\n", port, metricsPort) // #nosec G705 -- log file, not HTML
 
 	// Serve legal page from embedded static
-	http.HandleFunc("/legal.html", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/legal.html", func(w http.ResponseWriter, r *http.Request) {
 		data, err := staticFS.ReadFile("static/legal.html")
 		if err != nil {
 			http.NotFound(w, r)
@@ -7880,7 +7914,7 @@ func main() {
 		_, _ = w.Write(data)
 	})
 	// robots.txt (crawl policy for health and API/cache endpoints on this host)
-	http.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -7897,7 +7931,7 @@ func main() {
 		}
 	})
 	// Serve favicon from embedded static
-	http.HandleFunc("/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
 		data, err := staticFS.ReadFile("static/images/favicon.svg")
 		if err != nil {
 			http.NotFound(w, r)
@@ -7914,11 +7948,11 @@ func main() {
 	} else {
 		// File layout inside embedded FS is static/icons/<file>.
 		// With this handler mounted at /icons/, requesting /icons/<file> resolves to icons/<file> within iconsSubFS.
-		http.Handle("/icons/", http.FileServer(http.FS(iconsSubFS)))
+		mux.Handle("/icons/", http.FileServer(http.FS(iconsSubFS)))
 	}
 	// Serve index.html from embedded static (full server-side rendering: jump clone table + default mode table)
 	indexTmpl := template.Must(template.New("index").Delims("[[", "]]").ParseFS(staticFS, "static/index.html"))
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" && r.URL.Path != "/index.html" {
 			http.NotFound(w, r)
 			return
@@ -8102,22 +8136,5 @@ func main() {
 		_, _ = w.Write(htmlBytes)
 	})
 
-	mainHandler := securityHeadersMiddleware(metricsMiddleware(http.DefaultServeMux))
-	srv := &http.Server{
-		Addr:              ":" + port,
-		Handler:           mainHandler,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      120 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-	if err := srv.ListenAndServe(); err != nil {
-		fmt.Fprintln(mw, "Error starting server:", err)
-		fmt.Fprintln(logFile, "Error starting server:", err)
-	}
-
-	// filter out deployables?
-	// https://zkillboard.com/kill/121004544/
-	// https://zkillboard.com/kill/121097098/
-	// https://zkillboard.com/kill/121172883/ (npc kill)
+	return mux
 }

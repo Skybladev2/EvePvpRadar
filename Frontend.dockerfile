@@ -1,6 +1,12 @@
 # Base image tag: debian:bookworm-slim (digest pins the rootfs; bump when rebuilding intentionally).
 FROM debian:bookworm-slim@sha256:13cb01d584d2c23f475c088c168a48f9a08f033a10460572fbfd10912ec5ba7c
 
+# nginx is pinned to the first bookworm-security build that fixes the HTTP/2
+# memory-safety issues CVE-2026-123007 (flow-control heap overflow) and
+# CVE-2026-123633 (use-after-free). Both require client HTTP/2 to be enabled;
+# this config never enables it, but the pin keeps the patched build in place.
+# When a newer security revision ships, bump the pin and rebuild.
+
 # Build-time Debian mirror overrides for the deb822 .sources format used by bookworm.
 # Defaults are deb.debian.org (Fastly CDN). If that CDN is unreachable from your network,
 # set --build-arg DEBIAN_MIRROR=http://mirror.yandex.ru/debian (or any reachable mirror).
@@ -18,7 +24,7 @@ ARG DEBIAN_SECURITY_MIRROR=${DEBIAN_MIRROR}-security
 RUN sed -i "s|URIs: http://deb.debian.org/debian$|URIs: ${DEBIAN_MIRROR}|" /etc/apt/sources.list.d/debian.sources && \
     sed -i "s|URIs: http://deb.debian.org/debian-security$|URIs: ${DEBIAN_SECURITY_MIRROR}|" /etc/apt/sources.list.d/debian.sources && \
     apt-get update && apt-get install -y --no-install-recommends \
-    nginx \
+    nginx=1.22.1-9+deb12u11 \
     libnginx-mod-http-lua \
     libnginx-mod-http-headers-more-filter \
     libnginx-mod-http-modsecurity \
