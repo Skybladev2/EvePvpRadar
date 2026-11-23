@@ -15,10 +15,7 @@ import (
 // This test uses real systems from SDE and manually adds Thera connections (simulating what fetchTheraSignatures does)
 func TestRouteFinder_WithTheraSignatures(t *testing.T) {
 	// Load systems from SDE (same as routefinder_test.go)
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		t.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(t)
 
 	rf := NewRouteFinder(systems)
 
@@ -101,10 +98,7 @@ func TestRouteFinder_WithTheraSignatures(t *testing.T) {
 // Uses real systems from SDE to test with realistic routes
 func TestRouteFinder_TheraSignaturesAPI_Mock(t *testing.T) {
 	// Load systems from SDE (same as routefinder_test.go)
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		t.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(t)
 
 	// Use real system IDs: Jita (30000142) to Rens (30002510)
 	jitaID := 30000142
@@ -226,10 +220,7 @@ func TestRouteFinder_TheraSignaturesAPI_Mock(t *testing.T) {
 // Uses real systems from SDE
 func TestRouteFinder_TheraNotShorter(t *testing.T) {
 	// Load systems from SDE (same as routefinder_test.go)
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		t.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(t)
 
 	// Use real system IDs: Hek (30002053) to Jita (30000142) - these are close, ~9 jumps
 	hekID := 30002053
@@ -299,10 +290,7 @@ func TestRouteFinder_TheraNotShorter(t *testing.T) {
 // TestRouteFinder_TheraAPIMockServer_ActualAPI tests signature processing with real systems from SDE
 func TestRouteFinder_TheraAPIMockServer_ActualAPI(t *testing.T) {
 	// Load systems from SDE (same as routefinder_test.go)
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		t.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(t)
 
 	// Use real system IDs: Amarr (30002187) to Dodixie (30002659) - ~14 jumps direct
 	amarrID := 30002187
@@ -409,60 +397,60 @@ func TestRouteFinder_TheraAPIMockServer_ActualAPI(t *testing.T) {
 		rf.graphData.Write(func(data *GraphData) {
 			data.TheraSignatures = make(map[int]TheraSignatureInfo)
 			for _, sig := range mockResponse.Signatures {
-			// Get system IDs from API response
-			inSystemID := 0
-			switch v := sig.InSystemID.(type) {
-			case int:
-				inSystemID = v
-			case int64:
-				inSystemID = int(v)
-			case float64:
-				inSystemID = int(v)
-			case string:
-				if i, err := strconv.Atoi(v); err == nil {
-					inSystemID = i
+				// Get system IDs from API response
+				inSystemID := 0
+				switch v := sig.InSystemID.(type) {
+				case int:
+					inSystemID = v
+				case int64:
+					inSystemID = int(v)
+				case float64:
+					inSystemID = int(v)
+				case string:
+					if i, err := strconv.Atoi(v); err == nil {
+						inSystemID = i
+					}
 				}
-			}
 
-			outSystemID := 0
-			switch v := sig.OutSystemID.(type) {
-			case int:
-				outSystemID = v
-			case int64:
-				outSystemID = int(v)
-			case float64:
-				outSystemID = int(v)
-			case string:
-				if i, err := strconv.Atoi(v); err == nil {
-					outSystemID = i
+				outSystemID := 0
+				switch v := sig.OutSystemID.(type) {
+				case int:
+					outSystemID = v
+				case int64:
+					outSystemID = int(v)
+				case float64:
+					outSystemID = int(v)
+				case string:
+					if i, err := strconv.Atoi(v); err == nil {
+						outSystemID = i
+					}
 				}
-			}
 
-			// Determine which system connects to Thera
-			var systemConnectingToThera int
-			if outSystemID == TheraSystemID {
-				systemConnectingToThera = inSystemID
-			} else if inSystemID == TheraSystemID {
-				systemConnectingToThera = outSystemID
-			} else {
-				continue
-			}
-
-			if systemConnectingToThera == 0 {
-				continue
-			}
-
-			// Get signature ID
-			sigID := sig.InSignature
-			if sigID == "" {
-				sigID = sig.OutSignature
-			}
-			if sigID == "" {
-				// Use id as fallback
-				if idStr := fmt.Sprintf("%v", sig.ID); idStr != "" {
-					sigID = idStr
+				// Determine which system connects to Thera
+				var systemConnectingToThera int
+				if outSystemID == TheraSystemID {
+					systemConnectingToThera = inSystemID
+				} else if inSystemID == TheraSystemID {
+					systemConnectingToThera = outSystemID
+				} else {
+					continue
 				}
-			}
+
+				if systemConnectingToThera == 0 {
+					continue
+				}
+
+				// Get signature ID
+				sigID := sig.InSignature
+				if sigID == "" {
+					sigID = sig.OutSignature
+				}
+				if sigID == "" {
+					// Use id as fallback
+					if idStr := fmt.Sprintf("%v", sig.ID); idStr != "" {
+						sigID = idStr
+					}
+				}
 
 				data.TheraSignatures[systemConnectingToThera] = TheraSignatureInfo{SignatureID: sigID}
 
@@ -565,10 +553,7 @@ func TestRouteFinder_TheraAPIMockServer_ActualAPI(t *testing.T) {
 
 // TestFetchTheraSignatures_SignatureIDFieldByDirection ensures we pick the scan ID in k-space, not the Thera-side name.
 func TestFetchTheraSignatures_SignatureIDFieldByDirection(t *testing.T) {
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		t.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(t)
 	jitaID := 30000142
 	rensID := 30002510
 
@@ -639,8 +624,8 @@ func TestStripTheraWormholeEdges(t *testing.T) {
 	const kspaceID = 30000142
 	data := &GraphData{
 		Adjacency: map[int][]int{
-			kspaceID:       {50000000, TheraSystemID},
-			TheraSystemID:  {kspaceID},
+			kspaceID:      {50000000, TheraSystemID},
+			TheraSystemID: {kspaceID},
 		},
 		TheraSignatures: map[int]TheraSignatureInfo{},
 	}

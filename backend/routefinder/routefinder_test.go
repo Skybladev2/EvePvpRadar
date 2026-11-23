@@ -2,6 +2,7 @@ package routefinder
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,23 @@ import (
 	"time"
 )
 
-// LoadSystemsFromSDE loads systems from SDE files (test helper)
+var errSDETestDataMissing = errors.New("SDE test data is not available")
+
+// mustLoadSystemsForTest loads systems for data-driven tests. It skips the
+// test when no SDE data is present instead of failing a fresh checkout.
+func mustLoadSystemsForTest(tb testing.TB) []System {
+	tb.Helper()
+	systems, err := loadSystemsForTest()
+	if errors.Is(err, errSDETestDataMissing) {
+		tb.Skip("SDE test data is not available; run the backend once to populate backend/sde or keep backend/generated/systems.json")
+	}
+	if err != nil {
+		tb.Fatalf("Failed to load systems: %v", err)
+	}
+	return systems
+}
+
+// loadSystemsForTest loads systems from generated data or SDE files (test helper)
 func loadSystemsForTest() ([]System, error) {
 	// Try to load from generated/systems.json first
 	if file, err := os.Open(filepath.Join("..", "generated", "systems.json")); err == nil {
@@ -26,13 +43,13 @@ func loadSystemsForTest() ([]System, error) {
 
 	// Try to load from SDE
 	systemsFile := filepath.Join("..", "sde", "mapSolarSystems.jsonl")
-	if _, err := os.Stat(systemsFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("systems file not found: %s (run ./fetch-sde-testdata.sh from the repo root to download the SDE test data)", systemsFile)
+	if _, err := os.Stat(systemsFile); errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s", errSDETestDataMissing, systemsFile)
 	}
 
 	stargatesFile := filepath.Join("..", "sde", "mapStargates.jsonl")
-	if _, err := os.Stat(stargatesFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("stargates file not found: %s (run ./fetch-sde-testdata.sh from the repo root to download the SDE test data)", stargatesFile)
+	if _, err := os.Stat(stargatesFile); errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s", errSDETestDataMissing, stargatesFile)
 	}
 
 	systems, err := loadSystemsFromSDEFiles(systemsFile, stargatesFile)
@@ -72,7 +89,7 @@ func loadSystemsFromSDEFiles(systemsFile, stargatesFile string) ([]System, error
 			continue
 		}
 
-		systemID, ok := systemData["_key"].(float64)
+		systemID, ok := systemData["solarSystemID"].(float64)
 		if !ok {
 			continue
 		}
@@ -108,7 +125,7 @@ func loadSystemsFromSDEFiles(systemsFile, stargatesFile string) ([]System, error
 			continue
 		}
 
-		stargateID, ok := stargateData["_key"].(float64)
+		stargateID, ok := stargateData["stargateID"].(float64)
 		if !ok {
 			continue
 		}
@@ -163,10 +180,7 @@ func loadSystemsFromSDEFiles(systemsFile, stargatesFile string) ([]System, error
 
 func TestRouteFinder_Performance(t *testing.T) {
 	// Load systems first (without triggering main package startup)
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		t.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(t)
 
 	// Initialize route finder after systems are loaded
 	rf := NewRouteFinder(systems)
@@ -255,10 +269,7 @@ func TestRouteFinder_Performance(t *testing.T) {
 
 func TestRouteFinder_PerformanceBenchmark(t *testing.T) {
 	// Load systems first
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		t.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(t)
 
 	rf := NewRouteFinder(systems)
 
@@ -314,10 +325,7 @@ func TestRouteFinder_PerformanceBenchmark(t *testing.T) {
 
 func TestRouteFinder_ConcurrentAccess(t *testing.T) {
 	// Load systems first
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		t.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(t)
 
 	rf := NewRouteFinder(systems)
 
@@ -349,10 +357,7 @@ func TestRouteFinder_ConcurrentAccess(t *testing.T) {
 
 func BenchmarkRouteFinder_FindShortestRoute(b *testing.B) {
 	// Load systems first
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		b.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(b)
 
 	rf := NewRouteFinder(systems)
 	fromSystemID := 30000142 // Jita
@@ -380,10 +385,7 @@ func benchmarkDestinations(systems []System, fromSystemID, limit int) []int {
 
 // Simulates old proximity behavior: run shortest-route BFS per destination.
 func BenchmarkRouteFinder_ProximityPerTarget800(b *testing.B) {
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		b.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(b)
 	rf := NewRouteFinder(systems)
 
 	const fromSystemID = 30000142 // Jita
@@ -404,10 +406,7 @@ func BenchmarkRouteFinder_ProximityPerTarget800(b *testing.B) {
 
 // Simulates optimized proximity behavior: one single-source BFS, then lookups/path rebuilds.
 func BenchmarkRouteFinder_ProximitySingleSource800(b *testing.B) {
-	systems, err := loadSystemsForTest()
-	if err != nil {
-		b.Fatalf("Failed to load systems: %v", err)
-	}
+	systems := mustLoadSystemsForTest(b)
 	rf := NewRouteFinder(systems)
 
 	const fromSystemID = 30000142 // Jita

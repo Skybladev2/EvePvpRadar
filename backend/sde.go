@@ -1,7 +1,8 @@
 package main
 
 import (
-	"archive/zip"
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +23,19 @@ import (
 var (
 	sdeHTTPClientOnce sync.Once
 	sdeHTTPClient     *http.Client
+
+	sdeEnsureOnce sync.Once
+	sdeEnsureErr  error
 )
+
+// ensureSDE refreshes the SDE at most once per process. Tables are version
+// checked, so subsequent calls are cheap if the data is already current.
+func ensureSDE() error {
+	sdeEnsureOnce.Do(func() {
+		sdeEnsureErr = downloadSDE()
+	})
+	return sdeEnsureErr
+}
 
 func initSDEHTTPClient() {
 	sdeHTTPClientOnce.Do(func() {
@@ -58,7 +72,7 @@ func initSDEHTTPClient() {
 
 // ItemGroup represents an EVE Online item group from the SDE
 type ItemGroup struct {
-	Key                  int               `json:"_key"`
+	GroupID              int               `json:"groupID"`
 	Anchorable           bool              `json:"anchorable"`
 	Anchored             bool              `json:"anchored"`
 	CategoryID           int               `json:"categoryID"`
@@ -68,32 +82,251 @@ type ItemGroup struct {
 	UseBasePrice         bool              `json:"useBasePrice"`
 }
 
+// ItemType represents an EVE Online item type from the SDE
+type ItemType struct {
+	TypeID      int               `json:"typeID"`
+	GroupID     int               `json:"groupID"`
+	Name        map[string]string `json:"name"`
+	Description map[string]string `json:"description"`
+	Published   bool              `json:"published"`
+}
+
 const (
-	sdeURL         = "https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip"
-	sdeZipFile     = "sde.zip"
-	sdeExtractDir  = "sde"
+	// The SDE API serves one JSONL file per table. The index at sdeAPIBaseURL
+	// redirects to the current release and gives release-pinned table URLs.
+	sdeAPIBaseURL   = "https://sde.evetech.net/tranquility/latest/"
+	sdeDataDir      = "sde"
+	sdeManifestPath = "sde/.manifest.json"
 )
 
-// downloadSDE downloads the EVE Online SDE on every startup.
+// sdeRequiredTables are the tables the backend reads. Table versions are
+// compared between runs so unchanged tables are not downloaded again.
+var sdeRequiredTables = []string{
+	"mapSolarSystems",
+	"mapStargates",
+	"npcStations",
+	"groups",
+	"types",
+}
+
+type sdeJSONLInfo struct {
+	URL             string `json:"url"`
+	RecordSchemaURL string `json:"recordSchemaUrl"`
+}
+
+type sdeTableIndex struct {
+	Version string       `json:"version"`
+	JSONL   sdeJSONLInfo `json:"jsonl"`
+}
+
+type sdeIndex struct {
+	Release     string                   `json:"release"`
+	BuildNumber int                      `json:"buildNumber"`
+	ReleaseDate string                   `json:"releaseDate"`
+	Tables      map[string]sdeTableIndex `json:"tables"`
+}
+
+type sdeManifest struct {
+	Release     string            `json:"release"`
+	BuildNumber int               `json:"buildNumber"`
+	Tables      map[string]string `json:"tables"` // table name -> version
+}
+
+// downloadSDE fetches the SDE index and refreshes only the tables whose
+// version changed since the last run. If the index cannot be reached but all
+// tables are already on disk, the cached data is used.
 func downloadSDE() error {
+	var index *sdeIndex
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			wait := time.Duration(1<<uint(attempt)) * time.Second
-			log.Printf("Retrying SDE download in %v (attempt %d/3)", wait, attempt+1)
+			log.Printf("Retrying SDE index fetch in %v (attempt %d/3)", wait, attempt+1)
 			time.Sleep(wait)
 		}
-		lastErr = downloadSDEFile()
+		index, lastErr = fetchSDEIndex()
+		if lastErr == nil {
+			break
+		}
+		log.Printf("SDE index fetch attempt %d/3 failed: %v", attempt+1, lastErr)
+	}
+
+	if lastErr != nil {
+		if missing := missingSDETables(); len(missing) == 0 {
+			log.Printf("Warning: failed to fetch SDE index (%v); using cached SDE tables", lastErr)
+			return nil
+		} else {
+			return fmt.Errorf("failed to fetch SDE index and tables missing (%s): %v", strings.Join(missing, ", "), lastErr)
+		}
+	}
+
+	log.Printf("SDE release %s (build %d, %s)", index.Release, index.BuildNumber, index.ReleaseDate)
+
+	manifest := sdeManifest{
+		Release:     index.Release,
+		BuildNumber: index.BuildNumber,
+		Tables:      make(map[string]string, len(sdeRequiredTables)),
+	}
+	previous := readSDEManifest()
+
+	if err := ensureSDETables(index, previous, &manifest); err != nil {
+		return err
+	}
+	if err := writeSDEManifest(manifest); err != nil {
+		log.Printf("Warning: failed to write SDE manifest: %v", err)
+	}
+	return nil
+}
+
+func fetchSDEIndex() (*sdeIndex, error) {
+	initSDEHTTPClient()
+
+	req, err := http.NewRequest("GET", sdeAPIBaseURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SDE index request: %v", err)
+	}
+	setUserAgent(req)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := sdeHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch SDE index: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch SDE index: HTTP %d", resp.StatusCode)
+	}
+
+	var index sdeIndex
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 32<<20))
+	if err := decoder.Decode(&index); err != nil {
+		return nil, fmt.Errorf("failed to decode SDE index: %v", err)
+	}
+	if index.Release == "" || len(index.Tables) == 0 {
+		return nil, fmt.Errorf("SDE index does not contain a release or tables")
+	}
+	return &index, nil
+}
+
+func ensureSDETables(index *sdeIndex, previous sdeManifest, manifest *sdeManifest) error {
+	if err := os.MkdirAll(sdeDataDir, 0755); err != nil { // #nosec G301 -- 0755 for SDE data
+		return fmt.Errorf("failed to create SDE directory: %v", err)
+	}
+
+	for _, table := range sdeRequiredTables {
+		info, ok := index.Tables[table]
+		if !ok {
+			return fmt.Errorf("SDE table %q not present in release %s", table, index.Release)
+		}
+		if info.JSONL.URL == "" {
+			return fmt.Errorf("SDE table %q has no JSONL URL", table)
+		}
+
+		dest := filepath.Join(sdeDataDir, table+".jsonl")
+		if info.Version != "" && previous.Tables[table] == info.Version && fileHasData(dest) {
+			log.Printf("SDE table %s is up to date (version %s)", table, info.Version)
+			manifest.Tables[table] = info.Version
+			continue
+		}
+
+		if err := downloadSDETable(table, info.JSONL.URL, dest); err != nil {
+			if fileHasData(dest) {
+				log.Printf("Warning: failed to refresh SDE table %s (%v); using cached file", table, err)
+				continue
+			}
+			return err
+		}
+		manifest.Tables[table] = info.Version
+	}
+	return nil
+}
+
+func downloadSDETable(table, tableURL, dest string) error {
+	parsed, err := url.Parse(tableURL)
+	if err != nil {
+		return fmt.Errorf("invalid SDE URL for %s: %v", table, err)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("refusing non-HTTPS SDE URL for %s: %s", table, tableURL)
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+		lastErr = downloadSDETableOnce(table, tableURL, dest)
 		if lastErr == nil {
 			return nil
 		}
-		log.Printf("SDE download attempt %d/3 failed: %v", attempt+1, lastErr)
+		log.Printf("SDE table %s download attempt %d/3 failed: %v", table, attempt+1, lastErr)
 	}
-	return fmt.Errorf("failed to download SDE after 3 attempts: %v", lastErr)
+	return fmt.Errorf("failed to download SDE table %s: %v", table, lastErr)
+}
+
+func downloadSDETableOnce(table, tableURL, dest string) error {
+	initSDEHTTPClient()
+
+	req, err := http.NewRequest("GET", tableURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+	setUserAgent(req)
+
+	resp, err := sdeHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	tmpPath := dest + ".tmp"
+	out, err := os.Create(tmpPath) // #nosec G304 -- dest is built from a fixed table list
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %v", err)
+	}
+	tmpDone := false
+	defer func() {
+		_ = out.Close()
+		if !tmpDone {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if resp.ContentLength > 0 {
+		log.Printf("Downloading SDE table %s (%.1f MB)", table, float64(resp.ContentLength)/1024/1024)
+	} else {
+		log.Printf("Downloading SDE table %s", table)
+	}
+
+	pw := newProgressWriter(out, table)
+	go pw.reportLoop()
+
+	written, err := io.Copy(pw, resp.Body)
+	close(pw.done)
+
+	if err != nil {
+		return fmt.Errorf("failed to save table: %v", err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %v", err)
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		return fmt.Errorf("failed to move table into place: %v", err)
+	}
+	tmpDone = true
+
+	log.Printf("SDE table %s downloaded (%d bytes)", table, written)
+	return nil
 }
 
 type progressWriter struct {
 	wrapped io.Writer
+	label   string
 	total   int64
 	ticker  *time.Ticker
 	done    chan struct{}
@@ -114,281 +347,199 @@ func (pw *progressWriter) reportLoop() {
 			written := pw.total
 			delta := written - pw.last
 			pw.last = written
-			log.Printf("SDE download progress: %d bytes (%.1f MB/s)", written, float64(delta)/1024/1024)
+			log.Printf("SDE %s download progress: %d bytes (%.1f MB/s)", pw.label, written, float64(delta)/1024/1024)
 		case <-pw.done:
 			return
 		}
 	}
 }
 
-func newProgressWriter(w io.Writer) *progressWriter {
+func newProgressWriter(w io.Writer, label string) *progressWriter {
 	return &progressWriter{
 		wrapped: w,
+		label:   label,
 		ticker:  time.NewTicker(1 * time.Second),
 		done:    make(chan struct{}),
 	}
 }
 
-func downloadSDEFile() error {
-	initSDEHTTPClient()
-
-	out, err := os.Create(sdeZipFile)
-	if err != nil {
-		return fmt.Errorf("failed to create SDE file: %v", err)
-	}
-	defer out.Close()
-
-	req, err := http.NewRequest("GET", sdeURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %v", err)
-	}
-	setUserAgent(req)
-
-	resp, err := sdeHTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to download SDE: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download SDE: HTTP %d", resp.StatusCode)
-	}
-
-	contentLength := resp.ContentLength
-	if contentLength > 0 {
-		log.Printf("Downloading SDE from %s (%.1f MB)", sdeURL, float64(contentLength)/1024/1024)
-	} else {
-		log.Println("Downloading SDE from", sdeURL)
-	}
-
-	pw := newProgressWriter(out)
-	go pw.reportLoop()
-
-	written, err := io.Copy(pw, resp.Body)
-	close(pw.done)
-
-	if err != nil {
-		return fmt.Errorf("failed to save SDE: %v", err)
-	}
-
-	log.Printf("SDE downloaded successfully (%d bytes)", written)
-	return nil
+func fileHasData(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0
 }
 
-// extractSDE extracts the SDE zip file
-func extractSDE() error {
-	// Check if extraction is needed
-	if _, err := os.Stat(sdeExtractDir); err == nil {
-		log.Println("SDE already extracted, skipping extraction")
-		return nil
+func missingSDETables() []string {
+	var missing []string
+	for _, table := range sdeRequiredTables {
+		if _, err := sdeTableFile(table); err != nil {
+			missing = append(missing, table)
+		}
 	}
+	return missing
+}
 
-	log.Println("Extracting SDE...")
-
-	r, err := zip.OpenReader(sdeZipFile)
+func readSDEManifest() sdeManifest {
+	manifest := sdeManifest{Tables: make(map[string]string)}
+	content, err := os.ReadFile(sdeManifestPath) // #nosec G304 -- fixed path under sdeDataDir
 	if err != nil {
-		return fmt.Errorf("failed to open SDE zip: %v", err)
+		return manifest
 	}
-	defer r.Close()
-
-	// Create extraction directory
-	if err := os.MkdirAll(sdeExtractDir, 0755); err != nil { // #nosec G301 -- 0755 for SDE extract
-		return fmt.Errorf("failed to create extraction directory: %v", err)
+	if err := json.Unmarshal(content, &manifest); err != nil {
+		log.Printf("Warning: failed to parse SDE manifest: %v", err)
+		return sdeManifest{Tables: make(map[string]string)}
 	}
+	if manifest.Tables == nil {
+		manifest.Tables = make(map[string]string)
+	}
+	return manifest
+}
 
-	// Extract files
-	for _, f := range r.File {
-		// Skip directories
-		if f.FileInfo().IsDir() {
-			continue
-		}
+func writeSDEManifest(manifest sdeManifest) error {
+	content, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmpPath := sdeManifestPath + ".tmp"
+	if err := os.WriteFile(tmpPath, content, 0600); err != nil { // #nosec G306 -- private cache metadata
+		return err
+	}
+	return os.Rename(tmpPath, sdeManifestPath)
+}
 
-		// Create file path and prevent zip-slip (G305); validated with Rel check below
-		filePath := filepath.Clean(filepath.Join(sdeExtractDir, f.Name)) // #nosec G305 -- path validated below
-		rel, err := filepath.Rel(sdeExtractDir, filePath)
-		if err != nil || strings.HasPrefix(rel, "..") {
-			log.Printf("Skipping zip entry with path traversal: %s", f.Name)
-			continue
-		}
-
-		// Create directory structure
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil { // #nosec G301 -- 0755 for SDE extract
-			return fmt.Errorf("failed to create directory for %s: %v", filePath, err)
-		}
-
-		// Open file in zip
-		rc, err := f.Open()
-		if err != nil {
-			return fmt.Errorf("failed to open file in zip: %v", err)
-		}
-
-		// Create output file
-		outFile, err := os.Create(filePath) // #nosec G304 -- path validated above (zip-slip safe)
-		if err != nil {
-			_ = rc.Close()
-			return fmt.Errorf("failed to create output file %s: %v", filePath, err)
-		}
-
-		// Copy data
-		_, err = io.Copy(outFile, rc) // #nosec G110 -- SDE from trusted EVE source
-		_ = rc.Close()
-		_ = outFile.Close()
-
-		if err != nil {
-			return fmt.Errorf("failed to extract file %s: %v", filePath, err)
+// sdeTableFile returns the local JSONL path for a table. The first name that
+// exists wins; if none is present at the top level, nested legacy SDE layouts
+// are searched as a fallback.
+func sdeTableFile(names ...string) (string, error) {
+	for _, name := range names {
+		direct := filepath.Join(sdeDataDir, name+".jsonl")
+		if fileHasData(direct) {
+			return direct, nil
 		}
 	}
 
-	log.Println("SDE extracted successfully")
-	return nil
+	var found string
+	wanted := make(map[string]bool, len(names))
+	for _, name := range names {
+		wanted[name+".jsonl"] = true
+	}
+	err := filepath.Walk(sdeDataDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && wanted[info.Name()] {
+			found = path
+			return io.EOF
+		}
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		return "", fmt.Errorf("error searching for SDE table %s: %v", strings.Join(names, "/"), err)
+	}
+	if found == "" {
+		return "", fmt.Errorf("SDE table %s.jsonl not found", strings.Join(names, "/"))
+	}
+	return found, nil
+}
+
+// readJSONLines calls handle for every non-empty line of a JSONL file.
+func readJSONLines(path string, handle func(line []byte)) error {
+	f, err := os.Open(path) // #nosec G304 -- path comes from sdeTableFile
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	reader := bufio.NewReaderSize(f, 256*1024)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		line = bytes.TrimSpace(line)
+		if len(line) > 0 {
+			handle(line)
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+}
+
+type sdePosition struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
 }
 
 // getSystemsFromSDE reads systems data from the SDE
 func getSystemsFromSDE() ([]System, error) {
 	systems := []System{}
 
-	// Look for systems data in the extracted SDE
-	systemsFile := filepath.Join(sdeExtractDir, "sde", "bsd", "mapSolarSystems.jsonl")
-	if _, err := os.Stat(systemsFile); os.IsNotExist(err) {
-		// Try alternative path
-		systemsFile = filepath.Join(sdeExtractDir, "mapSolarSystems.jsonl")
+	systemsFile, err := sdeTableFile("mapSolarSystems")
+	if err != nil {
+		return nil, err
 	}
-
-	// Find the correct file in the extracted SDE
-	err := filepath.Walk(sdeExtractDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !info.IsDir() && strings.HasSuffix(info.Name(), "mapSolarSystems.jsonl") {
-			systemsFile = path
-			return io.EOF // Stop walking
-		}
-
-		return nil
-	})
-
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("error searching for systems file: %v", err)
-	}
-
-	if systemsFile == "" {
-		return nil, fmt.Errorf("mapSolarSystems.jsonl not found in SDE")
-	}
-
 	log.Printf("Reading systems from %s", systemsFile)
 
-	// Read the file line by line
-	content, err := os.ReadFile(systemsFile) // #nosec G304 -- path from filepath.Walk under sdeExtractDir
-	if err != nil {
-		return nil, fmt.Errorf("failed to read systems file: %v", err)
+	type solarSystemSDE struct {
+		SolarSystemID  int               `json:"solarSystemID"`
+		RegionID       int               `json:"regionID"`
+		SecurityStatus *float64          `json:"securityStatus"`
+		Name           map[string]string `json:"name"`
 	}
 
-	// Split by lines
-	lines := strings.Split(string(content), "\n")
-
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
+	parseErr := readJSONLines(systemsFile, func(line []byte) {
+		var systemData solarSystemSDE
+		if err := json.Unmarshal(line, &systemData); err != nil {
+			log.Printf("Warning: failed to parse solar system record: %v", err)
+			return
 		}
-
-		var systemData map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &systemData); err != nil {
-			log.Printf("Warning: failed to parse system line %d: %v", i+1, err)
-			continue
+		systemName := systemData.Name["en"]
+		if systemData.SolarSystemID == 0 || systemName == "" {
+			log.Printf("Warning: skipping solar system %d without ID or English name", systemData.SolarSystemID)
+			return
 		}
-
-		// Extract system name from the name object
-		nameObj, ok := systemData["name"].(map[string]interface{})
-		if !ok {
-			log.Printf("Warning: failed to extract name for system line %d", i+1)
-			continue
-		}
-		systemName, ok := nameObj["en"].(string)
-		if !ok {
-			log.Printf("Warning: failed to extract English name for system line %d", i+1)
-			continue
-		}
-
-		// Extract system ID (_key) and security status
-		systemID, ok := systemData["_key"].(float64)
-		if !ok {
-			log.Printf("Warning: failed to extract system ID for system %s", systemName)
-			continue
-		}
-
-		securityStatus, ok := systemData["securityStatus"].(float64)
-		if !ok {
+		if systemData.SecurityStatus == nil {
 			log.Printf("Warning: failed to extract security status for system %s", systemName)
-			continue
+			return
 		}
-
-		// Extract regionID (optional, defaults to 0 if not present)
-		regionID := 0
-		if regionIDVal, ok := systemData["regionID"].(float64); ok {
-			regionID = int(regionIDVal)
-		}
-
-		system := System{
-			SystemID:   int(systemID),
+		systems = append(systems, System{
+			SystemID:   systemData.SolarSystemID,
 			SystemName: systemName,
-			Security:   securityStatus,
-			RegionID:   regionID,
-		}
-
-		systems = append(systems, system)
+			Security:   *systemData.SecurityStatus,
+			RegionID:   systemData.RegionID,
+		})
+	})
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to read systems file: %v", parseErr)
 	}
 
 	log.Printf("Loaded %d systems from SDE", len(systems))
 	return systems, nil
 }
 
-// ItemType represents an EVE Online item type from the SDE
-type ItemType struct {
-	Key         int               `json:"_key"`
-	GroupID     int               `json:"groupID"`
-	Name        map[string]string `json:"name"`
-	Description map[string]string `json:"description"`
-	Published   bool              `json:"published"`
-}
-
 // getGroupsFromSDE reads groups data from the SDE
 func getGroupsFromSDE() (map[string]string, error) {
 	groups := make(map[string]string)
 
-	// Look for groups data in the backend/sde directory
-	groupsFile := filepath.Join("sde", "groups.jsonl")
-
-	if _, err := os.Stat(groupsFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("groups.jsonl not found in sde directory")
+	groupsFile, err := sdeTableFile("groups")
+	if err != nil {
+		return nil, err
 	}
-
 	log.Printf("Reading groups from %s", groupsFile)
 
-	// Read the file line by line
-	content, err := os.ReadFile(groupsFile) // #nosec G304 -- path is filepath.Join("sde","groups.jsonl")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read groups file: %v", err)
-	}
-
-	// Split by lines
-	lines := strings.Split(string(content), "\n")
-
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
+	parseErr := readJSONLines(groupsFile, func(line []byte) {
 		var groupData ItemGroup
-		if err := json.Unmarshal([]byte(line), &groupData); err != nil {
-			log.Printf("Warning: failed to parse group line %d: %v", i+1, err)
-			continue
+		if err := json.Unmarshal(line, &groupData); err != nil {
+			log.Printf("Warning: failed to parse group record: %v", err)
+			return
 		}
-
-		// Extract English name
 		if enName, ok := groupData.Name["en"]; ok {
-			groups[fmt.Sprintf("%d", groupData.Key)] = enName
+			groups[fmt.Sprintf("%d", groupData.GroupID)] = enName
 		}
+	})
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to read groups file: %v", parseErr)
 	}
 
 	log.Printf("Loaded %d groups from SDE", len(groups))
@@ -396,37 +547,26 @@ func getGroupsFromSDE() (map[string]string, error) {
 }
 
 // getGroupIDToCategoryIDFromSDE reads groups.jsonl and returns groupID -> categoryID.
-// In EVE SDE, categoryID corresponds to the `_key` in categories.jsonl.
+// In the SDE, categoryID corresponds to the key in categories.jsonl.
 func getGroupIDToCategoryIDFromSDE() (map[int]int, error) {
 	groupToCategory := make(map[int]int)
 
-	// Look for groups data in the backend/sde directory
-	groupsFile := filepath.Join("sde", "groups.jsonl")
-
-	if _, err := os.Stat(groupsFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("groups.jsonl not found in sde directory")
+	groupsFile, err := sdeTableFile("groups")
+	if err != nil {
+		return nil, err
 	}
-
 	log.Printf("Reading groups categories from %s", groupsFile)
 
-	content, err := os.ReadFile(groupsFile) // #nosec G304 -- path is filepath.Join("sde","groups.jsonl")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read groups file: %v", err)
-	}
-
-	lines := strings.Split(string(content), "\n")
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
+	parseErr := readJSONLines(groupsFile, func(line []byte) {
 		var groupData ItemGroup
-		if err := json.Unmarshal([]byte(line), &groupData); err != nil {
-			log.Printf("Warning: failed to parse group line %d: %v", i+1, err)
-			continue
+		if err := json.Unmarshal(line, &groupData); err != nil {
+			log.Printf("Warning: failed to parse group record: %v", err)
+			return
 		}
-
-		groupToCategory[groupData.Key] = groupData.CategoryID
+		groupToCategory[groupData.GroupID] = groupData.CategoryID
+	})
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to read groups file: %v", parseErr)
 	}
 
 	log.Printf("Loaded groupID->categoryID for %d groups", len(groupToCategory))
@@ -437,46 +577,32 @@ func getGroupIDToCategoryIDFromSDE() (map[int]int, error) {
 func getTypesFromSDE() (map[int]string, error) {
 	types := make(map[int]string)
 
-	// Look for types data in the backend/sde directory
-	typesFile := filepath.Join("sde", "types.jsonl")
-
-	if _, err := os.Stat(typesFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("types.jsonl not found in sde directory")
+	typesFile, err := sdeTableFile("types")
+	if err != nil {
+		return nil, err
 	}
-
 	log.Printf("Reading types from %s", typesFile)
 
-	// Read the file line by line
-	content, err := os.ReadFile(typesFile) // #nosec G304 -- path is filepath.Join("sde","types.jsonl")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read types file: %v", err)
-	}
-
-	// Split by lines
-	lines := strings.Split(string(content), "\n")
-
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
+	parseErr := readJSONLines(typesFile, func(line []byte) {
 		var typeData ItemType
-		if err := json.Unmarshal([]byte(line), &typeData); err != nil {
-			log.Printf("Warning: failed to parse type line %d: %v", i+1, err)
-			continue
+		if err := json.Unmarshal(line, &typeData); err != nil {
+			log.Printf("Warning: failed to parse type record: %v", err)
+			return
 		}
 
 		// Keep only types that exist in description.en.
 		// This avoids selecting "non-ship" / broken labels that can otherwise appear in mock data.
 		enDesc, hasDesc := typeData.Description["en"]
 		if !hasDesc || strings.TrimSpace(enDesc) == "" {
-			continue
+			return
 		}
 
-		// Extract English name
 		if enName, ok := typeData.Name["en"]; ok && strings.TrimSpace(enName) != "" {
-			types[typeData.Key] = enName
+			types[typeData.TypeID] = enName
 		}
+	})
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to read types file: %v", parseErr)
 	}
 
 	log.Printf("Loaded %d types from SDE", len(types))
@@ -486,25 +612,23 @@ func getTypesFromSDE() (map[int]string, error) {
 // getTypeToGroupFromSDE reads typeID->groupID from the SDE types file
 func getTypeToGroupFromSDE() (map[int]int, error) {
 	result := make(map[int]int)
-	typesFile := filepath.Join("sde", "types.jsonl")
-	if _, err := os.Stat(typesFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("types.jsonl not found (sde/types.jsonl)")
-	}
-	content, err := os.ReadFile(typesFile) // #nosec G304 -- path is filepath.Join("sde","types.jsonl")
+
+	typesFile, err := sdeTableFile("types")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read types file: %v", err)
+		return nil, err
 	}
-	lines := strings.Split(string(content), "\n")
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
+	log.Printf("Reading type groups from %s", typesFile)
+
+	parseErr := readJSONLines(typesFile, func(line []byte) {
 		var typeData ItemType
-		if err := json.Unmarshal([]byte(line), &typeData); err != nil {
-			log.Printf("Warning: failed to parse type line %d: %v", i+1, err)
-			continue
+		if err := json.Unmarshal(line, &typeData); err != nil {
+			log.Printf("Warning: failed to parse type record: %v", err)
+			return
 		}
-		result[typeData.Key] = typeData.GroupID
+		result[typeData.TypeID] = typeData.GroupID
+	})
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to read types file: %v", parseErr)
 	}
 	return result, nil
 }
@@ -513,119 +637,49 @@ func getTypeToGroupFromSDE() (map[int]int, error) {
 func getStargatesFromSDE() (map[int][]Stargate, error) {
 	stargates := make(map[int][]Stargate)
 
-	// Look for stargates data in the extracted SDE
-	stargatesFile := ""
-
-	// Find the correct file in the extracted SDE
-	err := filepath.Walk(sdeExtractDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !info.IsDir() && strings.HasSuffix(info.Name(), "mapStargates.jsonl") {
-			stargatesFile = path
-			return io.EOF // Stop walking
-		}
-
-		return nil
-	})
-
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("error searching for stargates file: %v", err)
+	stargatesFile, err := sdeTableFile("mapStargates")
+	if err != nil {
+		return nil, err
 	}
-
-	if stargatesFile == "" {
-		return nil, fmt.Errorf("mapStargates.jsonl not found in SDE")
-	}
-
 	log.Printf("Reading stargates from %s", stargatesFile)
 
-	// Read the file line by line
-	content, err := os.ReadFile(stargatesFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read stargates file: %v", err)
+	type stargateSDE struct {
+		StargateID    int         `json:"stargateID"`
+		SolarSystemID int         `json:"solarSystemID"`
+		Position      sdePosition `json:"position"`
+		Destination   struct {
+			SolarSystemID int `json:"solarSystemID"`
+			StargateID    int `json:"stargateID"`
+		} `json:"destination"`
 	}
 
-	// Split by lines
-	lines := strings.Split(string(content), "\n")
-
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
+	parseErr := readJSONLines(stargatesFile, func(line []byte) {
+		var stargateData stargateSDE
+		if err := json.Unmarshal(line, &stargateData); err != nil {
+			log.Printf("Warning: failed to parse stargate record: %v", err)
+			return
+		}
+		if stargateData.StargateID == 0 || stargateData.SolarSystemID == 0 || stargateData.Destination.SolarSystemID == 0 {
+			log.Printf("Warning: skipping incomplete stargate record")
+			return
 		}
 
-		var stargateData map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &stargateData); err != nil {
-			log.Printf("Warning: failed to parse stargate line %d: %v", i+1, err)
-			continue
-		}
-
-		// Extract stargate ID (_key)
-		stargateID, ok := stargateData["_key"].(float64)
-		if !ok {
-			log.Printf("Warning: failed to extract stargate ID for line %d", i+1)
-			continue
-		}
-
-		// Extract source system ID
-		fromSystem, ok := stargateData["solarSystemID"].(float64)
-		if !ok {
-			log.Printf("Warning: failed to extract source system ID for stargate %d", int(stargateID))
-			continue
-		}
-
-		// Extract destination system ID
-		destination, ok := stargateData["destination"].(map[string]interface{})
-		if !ok {
-			log.Printf("Warning: failed to extract destination for stargate %d", int(stargateID))
-			continue
-		}
-
-		toSystem, ok := destination["solarSystemID"].(float64)
-		if !ok {
-			log.Printf("Warning: failed to extract destination system ID for stargate %d", int(stargateID))
-			continue
-		}
-
-		// Extract position
-		var position [3]float64
-		if posObj, ok := stargateData["position"].(map[string]interface{}); ok {
-			// Position is stored as {"x": ..., "y": ..., "z": ...} object
-			var xOk, yOk, zOk bool
-			if x, ok := posObj["x"].(float64); ok {
-				position[0] = x
-				xOk = true
-			}
-			if y, ok := posObj["y"].(float64); ok {
-				position[1] = y
-				yOk = true
-			}
-			if z, ok := posObj["z"].(float64); ok {
-				position[2] = z
-				zOk = true
-			}
-			// Warn if any coordinate extraction failed
-			if !xOk || !yOk || !zOk {
-				log.Printf("Warning: failed to extract position coordinates for stargate %d (x:%v y:%v z:%v)", int(stargateID), xOk, yOk, zOk)
-			}
-		} else {
-			log.Printf("Warning: failed to extract position for stargate %d (expected object with x, y, z keys)", int(stargateID))
-			position = [3]float64{0, 0, 0}
-		}
-
-		// Add stargate connection (only in one direction since the SDE contains both directions)
-		stargates[int(fromSystem)] = append(stargates[int(fromSystem)], Stargate{
-			ID:                    int(stargateID),
-			Position:              position,
-			DestinationStargateID: int(toSystem),
+		// Only add one direction per record; the SDE contains both directions.
+		stargates[stargateData.SolarSystemID] = append(stargates[stargateData.SolarSystemID], Stargate{
+			ID:                    stargateData.StargateID,
+			Position:              [3]float64{stargateData.Position.X, stargateData.Position.Y, stargateData.Position.Z},
+			DestinationStargateID: stargateData.Destination.SolarSystemID,
 		})
+	})
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to read stargates file: %v", parseErr)
 	}
 
 	log.Printf("Loaded stargate connections from SDE")
 	return stargates, nil
 }
 
-// StationSDE represents an NPC station from the SDE staStations file
+// StationSDE represents an NPC station from the SDE npcStations file
 type StationSDE struct {
 	StationID int
 	Name      string
@@ -633,111 +687,70 @@ type StationSDE struct {
 	Position  [3]float64
 }
 
-// getStationsFromSDE reads station data from staStations.jsonl or npcStations.jsonl
+// getStationsFromSDE reads station data from npcStations.jsonl. Older SDE
+// layouts exposed staStations.jsonl with station names; those are still
+// accepted so previously extracted data keeps working.
 func getStationsFromSDE() ([]StationSDE, error) {
 	stations := []StationSDE{}
 
-	stationsFile := ""
-	err := filepath.Walk(sdeExtractDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			name := info.Name()
-			if strings.HasSuffix(name, "staStations.jsonl") || strings.HasSuffix(name, "npcStations.jsonl") {
-				stationsFile = path
-				return io.EOF
-			}
-		}
-		return nil
-	})
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("error searching for station file: %v", err)
+	stationsFile, err := sdeTableFile("npcStations", "staStations")
+	if err != nil {
+		return nil, err
 	}
-	if stationsFile == "" {
-		return nil, fmt.Errorf("staStations.jsonl or npcStations.jsonl not found in SDE")
+	log.Printf("Reading stations from %s", stationsFile)
+
+	type stationSDE struct {
+		StationID     int         `json:"stationID"`
+		StationName   string      `json:"stationName"`
+		SolarSystemID int         `json:"solarSystemID"`
+		Position      sdePosition `json:"position"`
 	}
 
-	log.Printf("Reading stations from %s", stationsFile)
-	content, err := os.ReadFile(stationsFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read stations file: %v", err)
-	}
-	isNewFormat := strings.HasSuffix(stationsFile, "npcStations.jsonl")
-	lines := strings.Split(string(content), "\n")
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
+	parseErr := readJSONLines(stationsFile, func(line []byte) {
+		var stationData stationSDE
+		if err := json.Unmarshal(line, &stationData); err != nil {
+			log.Printf("Warning: failed to parse station record: %v", err)
+			return
 		}
-		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			log.Printf("Warning: failed to parse station line %d: %v", i+1, err)
-			continue
+		if stationData.StationID == 0 || stationData.SolarSystemID == 0 {
+			return
 		}
-		key, ok := raw["_key"].(float64)
-		if !ok {
-			continue
-		}
-		name, ok := raw["stationName"].(string)
-		if !ok {
-			if isNewFormat {
-				name = fmt.Sprintf("Station %d", int(key))
-			} else {
-				continue
-			}
-		}
-		systemID, ok := raw["solarSystemID"].(float64)
-		if !ok {
-			continue
-		}
-		var pos [3]float64
-		if posObj, ok := raw["position"].(map[string]interface{}); ok {
-			if x, ok := posObj["x"].(float64); ok {
-				pos[0] = x
-			}
-			if y, ok := posObj["y"].(float64); ok {
-				pos[1] = y
-			}
-			if z, ok := posObj["z"].(float64); ok {
-				pos[2] = z
-			}
+		name := stationData.StationName
+		if name == "" {
+			// The SDE API npcStations table has no station names.
+			name = fmt.Sprintf("Station %d", stationData.StationID)
 		}
 		stations = append(stations, StationSDE{
-			StationID: int(key),
+			StationID: stationData.StationID,
 			Name:      name,
-			SystemID:  int(systemID),
-			Position:  pos,
+			SystemID:  stationData.SolarSystemID,
+			Position:  [3]float64{stationData.Position.X, stationData.Position.Y, stationData.Position.Z},
 		})
+	})
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to read stations file: %v", parseErr)
 	}
+
 	log.Printf("Loaded %d stations from SDE", len(stations))
 	return stations, nil
 }
 
-// loadSystemsFromSDE downloads, extracts, and loads systems and stargates from SDE
+// loadSystemsFromSDE downloads and loads systems and stargates from SDE
 func loadSystemsFromSDE() ([]System, error) {
-	// Download SDE if needed
-	if err := downloadSDE(); err != nil {
+	if err := ensureSDE(); err != nil {
 		return nil, fmt.Errorf("failed to download SDE: %v", err)
 	}
 
-	// Extract SDE if needed
-	if err := extractSDE(); err != nil {
-		return nil, fmt.Errorf("failed to extract SDE: %v", err)
-	}
-
-	// Load systems
 	systems, err := getSystemsFromSDE()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load systems from SDE: %v", err)
 	}
 
-	// Load stargates
 	stargates, err := getStargatesFromSDE()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load stargates from SDE: %v", err)
 	}
 
-	// Combine systems and stargates
 	for i := range systems {
 		if sg, exists := stargates[systems[i].SystemID]; exists {
 			systems[i].Stargates = sg

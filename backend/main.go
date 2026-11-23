@@ -2069,6 +2069,12 @@ func startup(mw io.Writer) {
 		fmt.Fprintln(mw, "Cache initialization failed:", err)
 	}
 	initCORSAllowlist(mw)
+
+	// Refresh the SDE before loading data. This checks table versions even
+	// when generated/ caches let the individual parsers skip SDE reads.
+	if err := ensureSDE(); err != nil {
+		fmt.Fprintln(mw, "SDE initialization failed:", err)
+	}
 	parseSystems(mw)
 	loadStations(mw)
 	parseGroups(mw)
@@ -2103,7 +2109,7 @@ func parseGroups(mw io.Writer) bool {
 	}
 
 	// Load groupID -> categoryID mapping from SDE so we can filter mock ship types
-	// to the correct SDE category (categories.jsonl _key=6 = ship category).
+	// to the correct SDE category (categories.jsonl categoryID=6 = ship category).
 	groupIDToCategoryIDFromSDE, err := getGroupIDToCategoryIDFromSDE()
 	if err != nil {
 		fmt.Fprintln(mw, "Error loading groupID->categoryID mapping from SDE:", err)
@@ -4222,7 +4228,7 @@ func loadMockData(mw io.Writer) {
 		if types == nil || types[typeID] == "" {
 			continue
 		}
-		// Only keep ship types in SDE category `_key=6` (ships).
+		// Only keep ship types in SDE category `categoryID=6` (ships).
 		if groupIDToCategoryID != nil && groupIDToCategoryID[groupID] != 6 {
 			continue
 		}
@@ -4263,7 +4269,7 @@ func loadMockData(mw io.Writer) {
 		if types == nil || types[typeID] == "" {
 			continue
 		}
-		// Only keep ship types in SDE category `_key=6` (ships).
+		// Only keep ship types in SDE category `categoryID=6` (ships).
 		if groupIDToCategoryID != nil {
 			if groupID, ok := typeIDToGroupID[typeID]; !ok || groupIDToCategoryID[groupID] != 6 {
 				continue

@@ -8,6 +8,7 @@ A web application for finding PvP activity in EVE Online.
 * Network access to the following sites:
   * https://r2z2.zkillboard.com
   * https://api.eve-scout.com
+  * https://sde.evetech.net (EVE static data)
   * https://esi.evetech.net
   * https://login.eveonline.com
   * https://www.eveonline.com (warzone insurgency feed)
