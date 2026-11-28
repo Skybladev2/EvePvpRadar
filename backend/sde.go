@@ -26,6 +26,10 @@ var (
 
 	sdeEnsureOnce sync.Once
 	sdeEnsureErr  error
+
+	// sdeDownloadMu serializes index/table refreshes so startup and the
+	// background stargate refresher cannot rewrite the manifest concurrently.
+	sdeDownloadMu sync.Mutex
 )
 
 // ensureSDE refreshes the SDE at most once per process. Tables are version
@@ -109,6 +113,13 @@ var sdeRequiredTables = []string{
 	"types",
 }
 
+// sdeStargateTables are refreshed by the running application when re-checking
+// the stargate layout. Only these tables affect the pathfinding graph.
+var sdeStargateTables = []string{
+	"mapSolarSystems",
+	"mapStargates",
+}
+
 type sdeJSONLInfo struct {
 	URL             string `json:"url"`
 	RecordSchemaURL string `json:"recordSchemaUrl"`
@@ -136,6 +147,15 @@ type sdeManifest struct {
 // version changed since the last run. If the index cannot be reached but all
 // tables are already on disk, the cached data is used.
 func downloadSDE() error {
+	return downloadSDETables(sdeRequiredTables)
+}
+
+// downloadSDETables refreshes only the requested SDE tables, preserving the
+// recorded versions of every other table in the manifest.
+func downloadSDETables(tables []string) error {
+	sdeDownloadMu.Lock()
+	defer sdeDownloadMu.Unlock()
+
 	var index *sdeIndex
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -152,7 +172,7 @@ func downloadSDE() error {
 	}
 
 	if lastErr != nil {
-		if missing := missingSDETables(); len(missing) == 0 {
+		if missing := missingSDETablesIn(tables); len(missing) == 0 {
 			log.Printf("Warning: failed to fetch SDE index (%v); using cached SDE tables", lastErr)
 			return nil
 		} else {
@@ -162,14 +182,17 @@ func downloadSDE() error {
 
 	log.Printf("SDE release %s (build %d, %s)", index.Release, index.BuildNumber, index.ReleaseDate)
 
+	previous := readSDEManifest()
 	manifest := sdeManifest{
 		Release:     index.Release,
 		BuildNumber: index.BuildNumber,
-		Tables:      make(map[string]string, len(sdeRequiredTables)),
+		Tables:      make(map[string]string, len(previous.Tables)+len(tables)),
 	}
-	previous := readSDEManifest()
+	for table, version := range previous.Tables {
+		manifest.Tables[table] = version
+	}
 
-	if err := ensureSDETables(index, previous, &manifest); err != nil {
+	if err := ensureSDETables(index, tables, previous, &manifest); err != nil {
 		return err
 	}
 	if err := writeSDEManifest(manifest); err != nil {
@@ -209,12 +232,12 @@ func fetchSDEIndex() (*sdeIndex, error) {
 	return &index, nil
 }
 
-func ensureSDETables(index *sdeIndex, previous sdeManifest, manifest *sdeManifest) error {
+func ensureSDETables(index *sdeIndex, tables []string, previous sdeManifest, manifest *sdeManifest) error {
 	if err := os.MkdirAll(sdeDataDir, 0755); err != nil { // #nosec G301 -- 0755 for SDE data
 		return fmt.Errorf("failed to create SDE directory: %v", err)
 	}
 
-	for _, table := range sdeRequiredTables {
+	for _, table := range tables {
 		info, ok := index.Tables[table]
 		if !ok {
 			return fmt.Errorf("SDE table %q not present in release %s", table, index.Release)
@@ -233,6 +256,7 @@ func ensureSDETables(index *sdeIndex, previous sdeManifest, manifest *sdeManifes
 		if err := downloadSDETable(table, info.JSONL.URL, dest); err != nil {
 			if fileHasData(dest) {
 				log.Printf("Warning: failed to refresh SDE table %s (%v); using cached file", table, err)
+				manifest.Tables[table] = previous.Tables[table]
 				continue
 			}
 			return err
@@ -368,9 +392,9 @@ func fileHasData(path string) bool {
 	return err == nil && info.Mode().IsRegular() && info.Size() > 0
 }
 
-func missingSDETables() []string {
+func missingSDETablesIn(tables []string) []string {
 	var missing []string
-	for _, table := range sdeRequiredTables {
+	for _, table := range tables {
 		if _, err := sdeTableFile(table); err != nil {
 			missing = append(missing, table)
 		}
@@ -735,12 +759,27 @@ func getStationsFromSDE() ([]StationSDE, error) {
 	return stations, nil
 }
 
-// loadSystemsFromSDE downloads and loads systems and stargates from SDE
+// loadSystemsFromSDE downloads and loads systems and stargates from SDE.
 func loadSystemsFromSDE() ([]System, error) {
 	if err := ensureSDE(); err != nil {
 		return nil, fmt.Errorf("failed to download SDE: %v", err)
 	}
+	return loadSystemsFromSDEFiles()
+}
 
+// refreshSystemsFromSDE re-checks the SDE index and reloads systems/stargates.
+// Unlike ensureSDE it is safe to call repeatedly: unchanged tables are skipped
+// by version, so a refresh only downloads what the SDE release changed.
+func refreshSystemsFromSDE() ([]System, error) {
+	if err := downloadSDETables(sdeStargateTables); err != nil {
+		return nil, fmt.Errorf("failed to refresh SDE stargate tables: %v", err)
+	}
+	return loadSystemsFromSDEFiles()
+}
+
+// loadSystemsFromSDEFiles reads the already-downloaded systems and stargates
+// tables and joins stargate connections onto their systems.
+func loadSystemsFromSDEFiles() ([]System, error) {
 	systems, err := getSystemsFromSDE()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load systems from SDE: %v", err)

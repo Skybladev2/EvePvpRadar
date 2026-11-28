@@ -36,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"io/fs"
@@ -561,9 +562,10 @@ func (s System) AdjacentSystemIDs() []int {
 	if s.Stargates == nil {
 		return []int{}
 	}
+	allSystems := currentSystems()
 	adjacent := make([]int, 0, len(s.Stargates))
 	for _, stargate := range s.Stargates {
-		for _, sys := range systems {
+		for _, sys := range allSystems {
 			// Skip systems with null stargates
 			if sys.Stargates == nil {
 				continue
@@ -578,7 +580,26 @@ func (s System) AdjacentSystemIDs() []int {
 	return adjacent
 }
 
-var systems []System
+var (
+	systemsMu sync.RWMutex
+	systems   []System // replaced atomically via setSystems; never mutated after publish
+)
+
+// currentSystems returns the current systems snapshot. The returned slice must be
+// treated as read-only; refreshes publish a new slice instead of mutating this one.
+func currentSystems() []System {
+	systemsMu.RLock()
+	defer systemsMu.RUnlock()
+	return systems
+}
+
+// setSystems publishes a new systems snapshot for readers and the route finder.
+func setSystems(newSystems []System) {
+	systemsMu.Lock()
+	systems = newSystems
+	systemsMu.Unlock()
+}
+
 var itemGroups = make(map[string]string)
 var groupIDToCategoryID map[int]int
 var types map[int]string
@@ -1089,12 +1110,17 @@ func proximityRouteCacheRemoveKeyLocked(key proximityRouteCacheKey) {
 	updateProximityRouteCacheMetricsLocked()
 }
 
+// routeLayoutGeneration changes whenever the stargate graph is replaced from a
+// new SDE layout. It is folded into the proximity cache fingerprint so cached
+// routes are discarded when the jump graph itself changes.
+var routeLayoutGeneration atomic.Uint64
+
 func refreshTheraAndGetFingerprint() string {
 	if globalRouteFinder == nil {
 		return ""
 	}
 	globalRouteFinder.EnsureTheraSignaturesFresh()
-	return globalRouteFinder.GetTheraSignaturesFingerprint()
+	return fmt.Sprintf("%s|layout:%d", globalRouteFinder.GetTheraSignaturesFingerprint(), routeLayoutGeneration.Load())
 }
 
 func proximityRouteCacheSyncFingerprint(currentFP string) {
@@ -1184,7 +1210,7 @@ func loadTradeHubs(mw io.Writer) {
 
 // getSystemIDByName finds a system ID by system name
 func getSystemIDByName(systemName string) int {
-	for _, sys := range systems {
+	for _, sys := range currentSystems() {
 		if strings.EqualFold(sys.SystemName, systemName) {
 			return sys.SystemID
 		}
@@ -2081,7 +2107,7 @@ func startup(mw io.Writer) {
 	parseTypes(mw)
 	parseTypeToGroup(mw)
 	// Initialize route finder after systems are loaded
-	routefinderSystems := convertSystemsToRoutefinder(systems)
+	routefinderSystems := convertSystemsToRoutefinder(currentSystems())
 	globalRouteFinder = routefinder.NewRouteFinder(routefinderSystems)
 	globalRouteFinder.SetUserAgent(httpUserAgent)
 
@@ -2233,12 +2259,14 @@ func parseSystems(mw io.Writer) bool {
 	if file, err := os.Open("generated/systems.json"); err == nil {
 		defer file.Close()
 
+		var cached []System
 		decoder := json.NewDecoder(file)
-		err = decoder.Decode(&systems)
+		err = decoder.Decode(&cached)
 		if err != nil {
 			fmt.Fprintln(mw, "Error decoding generated/systems.json:", err)
-		} else if len(systems) > 0 {
-			fmt.Fprintln(mw, "Loaded", len(systems), "systems from generated/systems.json")
+		} else if len(cached) > 0 {
+			setSystems(cached)
+			fmt.Fprintln(mw, "Loaded", len(cached), "systems from generated/systems.json")
 			return true
 		}
 	}
@@ -2251,22 +2279,15 @@ func parseSystems(mw io.Writer) bool {
 		return true
 	}
 
-	systems = sdeSystems
+	setSystems(sdeSystems)
 
 	// Save to systems.json for future use
-	jsonData, err := json.Marshal(systems)
-	if err != nil {
-		fmt.Fprintln(mw, "Error marshaling systems:", err)
-		return true
-	}
-
-	err = os.WriteFile("generated/systems.json", jsonData, fs.FileMode(0644))
-	if err != nil {
+	if err := writeGeneratedSystems(sdeSystems); err != nil {
 		fmt.Fprintln(mw, "Error writing systems.json:", err)
 		return true
 	}
 
-	fmt.Fprintln(mw, "Loaded", len(systems), "systems from SDE and saved to systems.json")
+	fmt.Fprintln(mw, "Loaded", len(sdeSystems), "systems from SDE and saved to systems.json")
 	return false
 }
 
@@ -2292,7 +2313,7 @@ func loadStations(mw io.Writer) {
 }
 
 func getSystemById(id int) System {
-	for _, sys := range systems {
+	for _, sys := range currentSystems() {
 		if sys.SystemID == id {
 			return sys
 		}
@@ -3644,10 +3665,14 @@ func appReadyForBalancer() bool {
 	return killmailCache != nil && killmailCache.WarmupComplete()
 }
 
-// recalculateForTheraUpdate recalculates data for all killmails in cache from the last hour when Thera signatures update.
+// recalculateForRouteDataUpdate recalculates data for all killmails in cache from
+// the last hour after Thera signatures or the stargate graph change.
 // Uses the same set as EnsureRecalculated (GetRecentKills). Serializes with EnsureRecalculated via recalcMu so full table rebuilds do not overlap.
-func recalculateForTheraUpdate() {
-	log.Printf("Thera signatures updated, recalculating data for all kills within an hour")
+func recalculateForRouteDataUpdate(reason string) {
+	if killmailCache == nil {
+		return
+	}
+	log.Printf("%s, recalculating data for all kills within an hour", reason)
 
 	kills := killmailCache.GetRecentKills()
 	log.Printf("Found %d killmails to recalculate", len(kills))
@@ -3664,13 +3689,18 @@ func recalculateForTheraUpdate() {
 
 	verifyReadFn := precalculatedData.Read()
 	verifyData := verifyReadFn()
-	log.Printf("Recalculate from Thera update done: %d killmails, %d systems with kills", len(kills), len(verifyData.systemsWithKills))
-	logging.Debugf("recalculateForTheraUpdate: Completed - %d systems with kills after recalculation", len(verifyData.systemsWithKills))
+	log.Printf("Recalculate after route data update done: %d killmails, %d systems with kills", len(kills), len(verifyData.systemsWithKills))
+	logging.Debugf("recalculateForRouteDataUpdate: Completed - %d systems with kills after recalculation", len(verifyData.systemsWithKills))
 
 	recalcMu.Lock()
 	recalcInProgress = false
 	recalcCond.Broadcast()
 	recalcMu.Unlock()
+}
+
+// recalculateForTheraUpdate recalculates cached routes after a Thera signature change.
+func recalculateForTheraUpdate() {
+	recalculateForRouteDataUpdate("Thera signatures updated")
 }
 
 // setupTheraUpdateListener sets up a listener for Thera signature updates
@@ -7719,6 +7749,9 @@ func main() {
 	setupTheraUpdateListener()
 	log.Println("Thera update listener started")
 
+	// Re-check the SDE stargate layout periodically and rebuild routing data when it changes.
+	startStargateLayoutRefresher()
+
 	fmt.Fprintln(mw, "Startup time: ", time.Since(startTime))
 	fmt.Fprintf(mw, "Server is listening on port %s (metrics on %s)...\n", port, metricsPort)      // #nosec G705 -- log output, not HTML
 	fmt.Fprintf(logFile, "Server is listening on port %s (metrics on %s)...\n", port, metricsPort) // #nosec G705 -- log file, not HTML
@@ -7821,7 +7854,7 @@ func newPublicMux(startTime time.Time) *http.ServeMux {
 		// Search systems by name (case-insensitive, partial match)
 		termLower := strings.ToLower(term)
 		var results []System
-		for _, sys := range systems {
+		for _, sys := range currentSystems() {
 			if strings.Contains(strings.ToLower(sys.SystemName), termLower) {
 				results = append(results, sys)
 			}

@@ -276,36 +276,76 @@ func (rf *RouteFinder) RebuildGraph(systems []System) {
 	rf.buildGraph(systems)
 }
 
-// buildGraph builds the adjacency list from provided systems
+// buildGraph rebuilds the stargate adjacency list from the provided systems.
+// Thera wormhole edges are dynamic (EVE Scout data) and are preserved across
+// rebuilds so an SDE refresh does not temporarily remove wormhole routes.
 func (rf *RouteFinder) buildGraph(systems []System) {
 	rf.graphData.Write(func(data *GraphData) {
-		// Clear existing data
-		data.Adjacency = make(map[int][]int)
-		data.SystemNameToID = make(map[string]int)
-		data.SystemIDToName = make(map[int]string)
-		data.TheraSignatures = make(map[int]TheraSignatureInfo)
-
-		// Build adjacency list and name mappings
-		for _, sys := range systems {
-			data.SystemIDToName[sys.SystemID] = sys.SystemName
-			data.SystemNameToID[sys.SystemName] = sys.SystemID
-
-			// Initialize adjacency list for this system
-			data.Adjacency[sys.SystemID] = make([]int, 0)
-
-			// Add connections from stargates
-			for _, stargate := range sys.Stargates {
-				// DestinationStargateID is actually the destination system ID
-				destSystemID := stargate.DestinationStargateID
-				data.Adjacency[sys.SystemID] = append(data.Adjacency[sys.SystemID], destSystemID)
-			}
-		}
+		preservedThera := data.TheraSignatures
+		buildStargateGraph(data, systems)
+		applyTheraConnections(data, preservedThera)
 	})
 
 	// Read to get count for logging
 	readFn := rf.graphData.Read()
 	data := readFn()
 	log.Printf("RouteFinder: Built graph with %d systems", len(data.Adjacency))
+}
+
+// buildStargateGraph resets the graph data and fills it from stargate links.
+func buildStargateGraph(data *GraphData, systems []System) {
+	data.Adjacency = make(map[int][]int)
+	data.SystemNameToID = make(map[string]int)
+	data.SystemIDToName = make(map[int]string)
+	data.TheraSignatures = make(map[int]TheraSignatureInfo)
+
+	// Build adjacency list and name mappings
+	for _, sys := range systems {
+		data.SystemIDToName[sys.SystemID] = sys.SystemName
+		data.SystemNameToID[sys.SystemName] = sys.SystemID
+
+		// Initialize adjacency list for this system
+		if _, ok := data.Adjacency[sys.SystemID]; !ok {
+			data.Adjacency[sys.SystemID] = make([]int, 0)
+		}
+
+		// Add connections from stargates
+		for _, stargate := range sys.Stargates {
+			// DestinationStargateID is actually the destination system ID
+			destSystemID := stargate.DestinationStargateID
+			data.Adjacency[sys.SystemID] = appendUniqueNeighbor(data.Adjacency[sys.SystemID], destSystemID)
+		}
+	}
+}
+
+// applyTheraConnections re-adds previously known Thera wormhole edges and their
+// signature metadata after a stargate graph rebuild. Connections to systems that
+// no longer exist in the SDE are dropped.
+func applyTheraConnections(data *GraphData, signatures map[int]TheraSignatureInfo) {
+	if len(signatures) == 0 {
+		return
+	}
+	data.TheraSignatures = make(map[int]TheraSignatureInfo, len(signatures))
+	if _, ok := data.Adjacency[TheraSystemID]; !ok {
+		data.Adjacency[TheraSystemID] = make([]int, 0)
+	}
+	for systemID, info := range signatures {
+		if _, ok := data.Adjacency[systemID]; !ok {
+			continue
+		}
+		data.TheraSignatures[systemID] = info
+		data.Adjacency[systemID] = appendUniqueNeighbor(data.Adjacency[systemID], TheraSystemID)
+		data.Adjacency[TheraSystemID] = appendUniqueNeighbor(data.Adjacency[TheraSystemID], systemID)
+	}
+}
+
+func appendUniqueNeighbor(neighbors []int, id int) []int {
+	for _, existing := range neighbors {
+		if existing == id {
+			return neighbors
+		}
+	}
+	return append(neighbors, id)
 }
 
 // removeNeighbor returns a copy of neighbors with one occurrence of remove omitted.
@@ -788,24 +828,24 @@ func (rf *RouteFinder) fetchTheraSignaturesInternal(force bool) {
 				outSystemID = getIntFromInterface(sig.LeadsToSystem) // Fallback to legacy
 			}
 
-		// Extract both signature IDs from the API response.
-		// - WH in k-space leading TO Thera: InSignature is k-space side, OutSignature is Thera side.
-		// - WH in Thera leading outward: InSignature is Thera side, OutSignature is k-space side.
-		// The API can report the same connection from either (or both) directions,
-		// so we store both and merge when the other direction also exists.
-		kspaceSig := strings.TrimSpace(sig.InSignature)
-		theraSig := strings.TrimSpace(sig.OutSignature)
-		if inSystemID == TheraSystemID {
-			// WH scanned in Thera, leads outward to k-space
-			kspaceSig, theraSig = theraSig, kspaceSig
-		}
-		// Fallback: try legacy fields
-		if kspaceSig == "" {
-			kspaceSig = strings.TrimSpace(sig.SignatureID)
-		}
-		if kspaceSig == "" {
-			kspaceSig = getStringFromInterface(sig.ID)
-		}
+			// Extract both signature IDs from the API response.
+			// - WH in k-space leading TO Thera: InSignature is k-space side, OutSignature is Thera side.
+			// - WH in Thera leading outward: InSignature is Thera side, OutSignature is k-space side.
+			// The API can report the same connection from either (or both) directions,
+			// so we store both and merge when the other direction also exists.
+			kspaceSig := strings.TrimSpace(sig.InSignature)
+			theraSig := strings.TrimSpace(sig.OutSignature)
+			if inSystemID == TheraSystemID {
+				// WH scanned in Thera, leads outward to k-space
+				kspaceSig, theraSig = theraSig, kspaceSig
+			}
+			// Fallback: try legacy fields
+			if kspaceSig == "" {
+				kspaceSig = strings.TrimSpace(sig.SignatureID)
+			}
+			if kspaceSig == "" {
+				kspaceSig = getStringFromInterface(sig.ID)
+			}
 
 			// Determine which system connects to Thera
 			// If out_system_id == Thera, then in_system_id connects to Thera
